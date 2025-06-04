@@ -3,12 +3,12 @@
 ![Python Version](https://img.shields.io/badge/python-3.8%2B-blue.svg)
 [![Datasets on Hugging Face](https://img.shields.io/badge/HuggingFace-Dataset-orange?logo=huggingface)](https://huggingface.co/datasets/EPFL-ECEO/CanadaFireSat)
 
-This repository contains the code for training models on the benchmark CanadaFireSate available. In this benchmark we investigate the potential of deep learning with multiple sensors for high-resolution wildfire forecasting.
+This repository contains the code for training models on the benchmark CanadaFireSat available. In this benchmark, we investigate the potential of deep learning with multiple sensors for high-resolution wildfire forecasting.
 
 - 💿 Dataset on [Hugging Face](https://huggingface.co/datasets/EPFL-ECEO/CanadaFireSat) <br>
 - 📝 Paper on [ArXiv](TBC) <br>
 - 📊 Data repository on [GitHub](https://github.com/eceo-epfl/CanadaFireSat-Data)
-- 🤖 Model Weights on [Hugging Face](TBC)
+- 🤖 Model Weights on [Hugging Face](https://huggingface.co/EPFL-ECEO)
 
 **Summary Representation:**
 <p align="center">
@@ -17,7 +17,7 @@ This repository contains the code for training models on the benchmark CanadaFir
 
 ## Model Architectures
 
-In this repository we train models following two different deep learning architectures CNN-based using ResNet encoders and transformer-based using ViT encoders.
+In this repository, we train models following two different deep learning architectures, CNN-based using ResNet encoders and Transformer-based using ViT encoders.
 
 Those models are trained across three data settings namely:
 
@@ -96,9 +96,9 @@ Those models are trained across three data settings namely:
 
 ## 🛠️ Set-Up
 
-- In order to log the model training you need to set-up a WandB profile or switch model loggers. You can specify your WandB informations in `global_config.yaml`.
+- In order to log the model training, you need to set-up a WandB profile or switch model loggers. You can specify your WandB information in `global_config.yaml`.
 
-- Then, you also need to install the python virtual environment:
+- Then, you also need to install the Python virtual environment:
 
 ```bash
 python -m venv fire-env
@@ -118,7 +118,7 @@ pip install -r requirements/requirements.txt --extra-index-url https://download.
 
 ## 📷 Results
 
-**📊 Performance Analysis**: In this table we describe the models' performances across data settings and architectures.
+**📊 Performance Analysis**: In this table, we describe the models' performances across data settings and architectures.
 
 <table cellspacing="0" cellpadding="6" style="border-collapse: collapse; text-align: center; border: 2px solid white;">
     <tr>
@@ -202,7 +202,7 @@ pip install -r requirements/requirements.txt --extra-index-url https://download.
 </table>
 
 
-**🗺️ Use Cases on large ROI:** We plot a large target area where a wildfire occurred in Québec in 2023, then the fire polygons corresponding to the wildfires then our model predictions across the region.
+**🗺️ Use Cases on large ROI:** We plot a large target area where a wildfire occurred in Québec in 2023, then the fire polygons corresponding to the wildfires, then our model predictions across the region.
 
 <p align="center">
   <img src="images/org-41355-new-date.png"/>
