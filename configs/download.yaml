@@ -1,0 +1,7 @@
+defaults:
+  - _self_
+  - global_config
+
+regions: ["Ontario"]
+split: "test_hard"
+output_dir: "${paths.hf_data}"

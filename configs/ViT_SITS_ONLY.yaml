@@ -1,0 +1,95 @@
+defaults:
+  - _self_
+  - global_config
+
+MODEL:
+  architecture:  "ViTFacto"
+  vit_type: "dinov2_small"
+  pretrained: True
+  input_img_res: 264
+  img_res: 252
+  train_max_seq_len: 5
+  val_max_seq_len: 5
+  input_dim: 14
+  patch_size: 14
+  num_classes: 2
+  out_H: 25
+  out_W: 25
+  doy_int_type: "channel"
+  temp_enc_type: "convlstm"
+  kernel_size: [3, 3]
+  n_stack_layers: 1
+  threshold: 0.5
+  flag_lora: True
+  rank_lora: 32
+  alpha_lora: 32.0
+  dropout_lora: 0.1
+
+SOLVER:
+  num_epochs: 20
+  num_warmup_epochs: 2
+  loss_function: masked_dice_loss
+  lr_scheduler: 'cosine'
+  lr_base: 5e-6
+  lr_min: 1e-7
+  lr_start: 1e-7
+  num_cycles: 1
+  weight_decay: 0.01
+  accumulate_grad_batches: 3
+  interval: "epoch"
+
+### Leveraging RAW *.npy files ###
+DATASETS:
+  kwargs:
+    mean_file: "${paths.bands_mean}"
+    std_file: "${paths.bands_std}"
+    with_loc: False
+    with_doy: True
+    # bands: possibility to specify the selected bands.
+  train:
+    paths: "${paths.split}"
+    base_dir: ["${paths.pos_sits}", ${paths.neg_sits}"]
+    label_dir: "${paths.label}"
+    batch_size: 12
+    num_workers: 8
+
+  eval:
+    paths: "${paths.split}"
+    base_dir: ["${paths.pos_sits}", ${paths.neg_sits}"]
+    label_dir: "${paths.label}"
+    batch_size: 12
+    num_workers: 8
+
+  test:
+
+### Leveraging Hf parquet files ###
+#DATASETS:
+#  mode: "huggingface"
+#  kwargs:
+#    mean_file: "${paths.bands_mean}"
+#    std_file: "${paths.bands_std}"
+#    with_loc: False
+#    with_doy: True
+    # bands: possibility to specify the selected bands.
+#  train:
+#    data_dir: "${paths.hf_data}"
+#    batch_size: 24
+#    num_workers: 8
+#
+#  eval:
+#    data_dir: "${paths.hf_data}"
+#    batch_size: 24
+#    num_workers: 8
+
+CHECKPOINT:
+  load_from_checkpoint:
+  experiment_name: "ViT_SITS_ONLY"
+  save_path: "./results/models"
+  train_metrics_steps: 200
+  save_steps: 10000
+  wandb_project: "${wandb.project}"
+  wandb_user: "${wandb.user}"
+
+SET-UP:
+  seed: 42
+  local_device_ids: [0]

@@ -1,0 +1,3 @@
+[submodule "deepsat"]
+	path = deepsat
+	url = git@github.com:hugoporta/DeepSatModels.git

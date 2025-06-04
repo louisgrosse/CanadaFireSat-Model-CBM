@@ -1,0 +1,99 @@
+defaults:
+  - _self_
+  - global_config
+
+model_path: "./results/models/ViT_MULTI/{TBD}" # Need to specify exact model path
+config_name: "config_file.yaml"
+mode: "env"
+split: "val" # test
+output_dir: "./results/models/ViT_MULTI"
+seed: 42
+with_region: True
+fwi_ths: [5, 10, 20, 30]
+n_plots: 50
+size_plots: 6
+suffix: "one"
+
+MODEL:
+  architecture:  "TabViTFactorizeModel"
+  vit_type: "dinov2_small"
+  pretrained: True
+  input_img_res: 264
+  img_res: 260
+  train_max_seq_len: 5
+  val_max_seq_len: 5
+  input_dim: 14
+  patch_size: 14
+  num_classes: 2
+  out_H: 26
+  out_W: 26
+  doy_int_type: "channel"
+  temp_enc_type: "convlstm"
+  kernel_size: [3, 3]
+  n_stack_layers: 1
+  threshold: 0.5
+  flag_lora: True
+  rank_lora: 32
+  alpha_lora: 32.0
+  dropout_lora: 0.1
+
+  dropout: 0.
+  tab_input_dim: 15
+  output_dim: 384
+  env_stack_layers: 1
+  mask_env: True
+  fusion: "late"
+  tab_enc: True
+
+SOLVER:
+  num_epochs: 20
+  num_warmup_epochs: 2
+  loss_function:  masked_dice_loss
+
+### Leveraging RAW *.npy files ###
+DATASETS:
+  kwargs:
+    tab_dir: ["${paths.pos_env_tab}", "${paths.neg_env_tab}"]
+    mean_file: "${paths.bands_mean}"
+    std_file: "${paths.bands_std}"
+    with_loc: False
+    with_doy: True
+    is_spatial: False
+    nan_value: "median"
+    # bands: possibility to specify the selected bands.
+  train:
+    paths: "${paths.split}"
+    base_dir: ["${paths.pos_sits}", ${paths.neg_sits}"]
+    label_dir: "${paths.label}"
+    batch_size: 24
+    num_workers: 8
+
+  eval:
+    paths: "${paths.split}"
+    base_dir: ["${paths.pos_sits}", ${paths.neg_sits}"]
+    label_dir: "${paths.label}"
+    batch_size: 24
+    num_workers: 8
+    hard: False
+
+### Leveraging Hf parquet files ###
+#DATASETS:
+#  mode: "huggingface"
+#  kwargs:
+#    mean_file: "${paths.bands_mean}"
+#    std_file: "${paths.bands_std}"
+#    with_loc: False
+#    with_doy: True
+#    is_spatial: True
+#    nan_value: "median"
+    # bands: possibility to specify the selected bands.
+#  train:
+#    data_dir: "${paths.hf_data}"
+#    batch_size: 24
+#    num_workers: 8
+#
+#  eval:
+#    data_dir: "${paths.hf_data}"
+#    batch_size: 24
+#    num_workers: 8
+#    hard: False

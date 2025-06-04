@@ -1,0 +1,96 @@
+defaults:
+  - _self_
+  - global_config
+
+model_path: "./results/models/ViT_ENV_ONLY/{TBD}" # Need to specify exact model path
+config_name: "config_file.yaml"
+mode: "env"
+split: "val" # test
+output_dir: "./results/models/ViT_ENV_ONLY"
+seed: 42
+with_region: True
+fwi_ths: [5, 10, 20, 30]
+
+MODEL:
+  MODEL:
+  architecture:  "EnvViTFactorizeModel"
+  vit_type: "dinov2_small"
+  pretrained: False
+  mid_input_res: 32
+  img_res: 32
+  input_dim: 6
+  patch_size: 2
+  num_classes: 2
+  out_H: 26
+  out_W: 26
+  doy_int_type: "channel"
+  temp_enc_type: "convlstm"
+  kernel_size: [3, 3]
+  n_stack_layers: 1
+  threshold: 0.5
+  flag_lora: False
+
+  low_input_res: 32
+  env_vit_type: "dinov2_small"
+  env_patch_size: 8
+  low_input_dim: 10
+  env_stack_layers: 1
+  mask_env: True
+
+  # Regularization
+  pos_drop_rate: 0.2
+  drop_rate: 0.2
+  proj_drop_rate: 0.2
+  attn_drop_rate: 0.2
+  drop_path_rate: 0.1
+
+SOLVER:
+  num_epochs: 20
+  num_warmup_epochs: 2
+  pos_weight: 6.7
+  loss_function:  masked_dice_loss
+  label_smoothing: 0.1
+
+### Leveraging RAW *.npy files ###
+DATASETS:
+  kwargs:
+    tab_dir: ["${paths.pos_env_spa}", "${paths.neg_env_spa}"]
+    with_loc: False
+    with_doy: True
+    is_spatial: True
+    nan_value: "median"
+    # bands: possibility to specify the selected bands.
+  train:
+    paths: "${paths.split}"
+    label_dir: "${paths.label}"
+    batch_size: 24
+    num_workers: 8
+
+  eval:
+    paths: "${paths.split}"
+    label_dir: "${paths.label}"
+    batch_size: 24
+    num_workers: 8
+    hard: False
+
+### Leveraging Hf parquet files ###
+#DATASETS:
+#  mode: "huggingface"
+#  kwargs:
+#    mean_file: "${paths.bands_mean}"
+#    std_file: "${paths.bands_std}"
+#    with_loc: False
+#    with_doy: True
+#    is_spatial: True
+#    nan_value: "median"
+    # bands: possibility to specify the selected bands.
+#  train:
+#    data_dir: "${paths.hf_data}"
+#    batch_size: 24
+#    num_workers: 8
+#
+#  eval:
+#    data_dir: "${paths.hf_data}"
+#    batch_size: 24
+#    num_workers: 8
+#    hard: False

@@ -1,0 +1,18 @@
+defaults:
+  - _self_
+  - global_config
+
+json_file: "${paths.split}"
+root_dir: ["${paths.pos_sits}", ${paths.neg_sits}"]
+label_dir: "${paths.label}"
+split: "test"
+horizon_type: "8-day Prediction"
+fwi_file_path: "${paths.fwi}"
+output_dir: "./results/models/hard_update-fwi-window50-8day-prediction"
+fwi_res: 0.25
+label_res: 0.1
+window_type: "pixel"
+window_size: 16
+fwi_thresholds: [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40]
+fwi_max: 50
+#fwi_thresholds: [21.3, 38.0] # High danger and Very high danger from https://climate-adapt.eea.europa.eu/en/metadata/indicators/fire-weather-index-monthly-mean-1979-2019

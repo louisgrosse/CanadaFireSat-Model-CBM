@@ -1,0 +1,94 @@
+defaults:
+  - _self_
+  - global_config
+
+MODEL:
+  architecture:  "ResNet"
+  resnet_type: "resnet50"
+  pretrained: True
+  input_img_res: 264
+  img_res: 240
+  train_max_seq_len: 5
+  val_max_seq_len: 5
+  input_dim: 14
+  depth: 5
+  encoder_channels: [512, 1024, 2048]
+  decoder_channels: [256, 128, 64]
+  num_classes: 2
+  kernel_size: [3, 3]
+  n_stack_layers: 1
+  out_H: 24
+  out_W: 24
+  threshold: 0.5
+  multi_head: False
+
+SOLVER:
+  num_epochs: 20
+  num_warmup_epochs: 2
+  pos_weight: 6.7
+  loss_function: combined_dice_ce
+  lr_scheduler: 'cosine'
+  lr_base: 5e-6
+  lr_min: 1e-7
+  lr_start: 1e-7
+  num_cycles: 1
+  weight_decay: 0.01
+  accumulate_grad_batches: 2
+  interval: "epoch"
+
+### Leveraging RAW *.npy files ###
+DATASETS:
+  kwargs:
+    mean_file: "${paths.bands_mean}"
+    std_file: "${paths.bands_std}"
+    with_loc: False
+    with_doy: True
+    # bands: possibility to specify the selected bands.
+  train:
+    paths: "${paths.split}"
+    base_dir: ["${paths.pos_sits}", ${paths.neg_sits}"]
+    label_dir: "${paths.label}"
+    batch_size: 12
+    num_workers: 8
+
+  eval:
+    paths: "${paths.split}"
+    base_dir: ["${paths.pos_sits}", ${paths.neg_sits}"]
+    label_dir: "${paths.label}"
+    batch_size: 12
+    num_workers: 8
+
+  test:
+
+### Leveraging Hf parquet files ###
+#DATASETS:
+#  mode: "huggingface"
+#  kwargs:
+#    mean_file: "${paths.bands_mean}"
+#    std_file: "${paths.bands_std}"
+#    with_loc: False
+#    with_doy: True
+    # bands: possibility to specify the selected bands.
+#  train:
+#    data_dir: "${paths.hf_data}"
+#    batch_size: 24
+#    num_workers: 8
+#
+#  eval:
+#    data_dir: "${paths.hf_data}"
+#    batch_size: 24
+#    num_workers: 8
+
+
+CHECKPOINT:
+  load_from_checkpoint:
+  experiment_name: "CNN_SITS_ONLY"
+  save_path: "./results/models"
+  train_metrics_steps: 200
+  save_steps: 10000
+  wandb_project: "${wandb.project}"
+  wandb_user: "${wandb.user}"
+
+SET-UP:
+  seed: 42
+  local_device_ids: [0]
