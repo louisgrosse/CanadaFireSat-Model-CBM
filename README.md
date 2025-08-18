@@ -3,10 +3,10 @@
 ![Python Version](https://img.shields.io/badge/python-3.8%2B-blue.svg)
 [![Datasets on Hugging Face](https://img.shields.io/badge/HuggingFace-Dataset-orange?logo=huggingface)](https://huggingface.co/datasets/EPFL-ECEO/CanadaFireSat)
 
-This repository contains the code for training models on the benchmark CanadaFireSat available. In this benchmark, we investigate the potential of deep learning with multiple sensors for high-resolution wildfire forecasting.
+This repository contains the code for training models on the benchmark CanadaFireSat available online. In this benchmark, we investigate the potential of deep learning with multiple sensors for high-resolution wildfire forecasting.
 
 - 💿 Dataset on [Hugging Face](https://huggingface.co/datasets/EPFL-ECEO/CanadaFireSat) <br>
-- 📝 Paper on [ArXiv](TBC) <br>
+- 📝 Paper on [ArXiv](https://arxiv.org/abs/2506.08690) <br>
 - 📊 Data repository on [GitHub](https://github.com/eceo-epfl/CanadaFireSat-Data)
 - 🤖 Model Weights on [Hugging Face](https://huggingface.co/EPFL-ECEO)
 
@@ -231,5 +231,10 @@ pip install -r requirements/requirements.txt --extra-index-url https://download.
 ## 🖋️ Citation
 
 ```
-TBC
+@article{porta2025canadafiresat,
+  title={CanadaFireSat: Toward high-resolution wildfire forecasting with multiple modalities},
+  author={Porta, Hugo and Dalsasso, Emanuele and McCarty, Jessica L and Tuia, Devis},
+  journal={arXiv preprint arXiv:2506.08690},
+  year={2025}
+}
 ```
