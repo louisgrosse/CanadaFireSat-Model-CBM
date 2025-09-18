@@ -43,7 +43,31 @@ SOLVER:
 
 
 ### Leveraging RAW *.npy files ###
+#DATASETS:
+#  kwargs:
+#    mean_file: "${paths.bands_mean}"
+#    std_file: "${paths.bands_std}"
+#    with_loc: False
+#    with_doy: True
+#    # bands: possibility to specify the selected bands.
+#  train:
+#    paths: "${paths.split}"
+#    base_dir: ["${paths.pos_sits}", ${paths.neg_sits}"]
+#    label_dir: "${paths.label}"
+#    batch_size: 12
+#    num_workers: 8
+
+#  eval:
+#    paths: "${paths.split}"
+#    base_dir: ["${paths.pos_sits}", ${paths.neg_sits}"]
+#    label_dir: "${paths.label}"
+#    batch_size: 12
+#    num_workers: 8
+#    hard: False
+
+### Leveraging Hf parquet files ###
 DATASETS:
+  mode: "huggingface"
   kwargs:
     mean_file: "${paths.bands_mean}"
     std_file: "${paths.bands_std}"
@@ -51,36 +75,12 @@ DATASETS:
     with_doy: True
     # bands: possibility to specify the selected bands.
   train:
-    paths: "${paths.split}"
-    base_dir: ["${paths.pos_sits}", ${paths.neg_sits}"]
-    label_dir: "${paths.label}"
-    batch_size: 12
+    data_dir: "${paths.hf_data}"
+    batch_size: 24
     num_workers: 8
 
   eval:
-    paths: "${paths.split}"
-    base_dir: ["${paths.pos_sits}", ${paths.neg_sits}"]
-    label_dir: "${paths.label}"
-    batch_size: 12
+    data_dir: "${paths.hf_data}"
+    batch_size: 24
     num_workers: 8
     hard: False
-
-### Leveraging Hf parquet files ###
-#DATASETS:
-#  mode: "huggingface"
-#  kwargs:
-#    mean_file: "${paths.bands_mean}"
-#    std_file: "${paths.bands_std}"
-#    with_loc: False
-#    with_doy: True
-    # bands: possibility to specify the selected bands.
-#  train:
-#    data_dir: "${paths.hf_data}"
-#    batch_size: 24
-#    num_workers: 8
-#
-#  eval:
-#    data_dir: "${paths.hf_data}"
-#    batch_size: 24
-#    num_workers: 8
-#    hard: False
