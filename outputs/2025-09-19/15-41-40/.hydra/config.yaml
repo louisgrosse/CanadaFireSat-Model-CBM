@@ -1,0 +1,49 @@
+MODEL:
+  architecture: MSClipFactorize
+  msclip_model_name: Llama3-MS-CLIP-Base
+  msclip_ckpt: ''
+  input_dim: 10
+  num_classes: 2
+  out_H: 25
+  out_W: 25
+  temp_enc_type: attention
+  temp_depth: 2
+  use_conv_decoder: false
+  freeze_msclip: true
+SOLVER:
+  num_epochs: 10
+  num_warmup_epochs: 2
+  loss_function: masked_dice_loss
+  lr_scheduler: cosine
+  lr_start: 1.0e-06
+  lr_min: 1.0e-06
+  num_cycles: 1
+  lr_base: 5.0e-05
+  weight_decay: 0.0
+  accumulate_grad_batches: 3
+DATASETS:
+  mode: huggingface
+  kwargs:
+    mean_file: ${paths.bands_mean}
+    std_file: ${paths.bands_std}
+    with_loc: false
+    with_doy: true
+  train:
+    data_dir: ${paths.hf_data}
+    batch_size: 12
+    num_workers: 8
+  eval:
+    data_dir: ${paths.hf_data}
+    batch_size: 12
+    num_workers: 8
+CHECKPOINT:
+  load_from_checkpoint: null
+  experiment_name: ViT_SITS_ONLY
+  save_path: ./results/models
+  train_metrics_steps: 200
+  save_steps: 10000
+  wandb_project: ${wandb.project}
+  wandb_user: ${wandb.user}
+SET-UP:
+  local_device_ids:
+  - 0

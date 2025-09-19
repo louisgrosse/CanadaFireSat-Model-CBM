@@ -101,7 +101,7 @@ LAND_COVER_DICT_IDS = {
     19: "Snow and ice",
 }
 
-HF_IMG_COLUMNS = ["doy", "10x", "20x", "60x", "loc", "labels", "region", "tile_id", "file_id"]
+HF_IMG_COLUMNS = ["doy", "10x", "20x", "60x", "loc", "labels", "region", "tile_id", "file_id","fwi"]
 HF_MIX_TAB_COLUMNS = [
     "doy",
     "10x",

@@ -1,0 +1,65 @@
+defaults:
+  - _self_
+  - global_config
+
+MODEL:
+  architecture: "MSClipFactorize"
+  msclip_model_name: "Llama3-MS-CLIP-Base"
+  msclip_ckpt: ""        # or path to local ckpt; leave empty to use HF download configured in build_model
+  input_img_res: 264
+  img_res: 252
+  train_max_seq_len: 5
+  val_max_seq_len: 5
+  input_dim: 14
+  patch_size: 14
+  num_classes: 2
+  out_H: 25
+  out_W: 25
+  temp_enc_type: "attention"   # or "convlstm"
+  temp_depth: 2
+  use_conv_decoder: false
+  freeze_msclip: true
+
+SOLVER:
+  num_epochs: 10
+  num_warmup_epochs: 2
+  loss_function: masked_dice_loss
+  lr_scheduler: 'cosine'
+  lr_start: 1e-6
+  lr_min: 1e-6
+  num_cycles: 1
+  lr_base: 5e-5
+  weight_decay: 0.0
+  accumulate_grad_batches: 3
+
+DATASETS:
+  mode: "huggingface"
+  kwargs:
+    mean_file: "${paths.bands_mean}"
+    std_file: "${paths.bands_std}"
+    with_loc: False
+    with_doy: True
+    # bands: possibility to specify the selected bands.
+  train:
+    data_dir: "${paths.hf_data}"
+    batch_size: 12
+    num_workers: 8
+
+  eval:
+    data_dir: "${paths.hf_data}"
+    batch_size: 12
+    num_workers: 8
+
+
+CHECKPOINT:
+  load_from_checkpoint:
+  experiment_name: "ViT_SITS_ONLY"
+  save_path: "./results/models"
+  train_metrics_steps: 200
+  save_steps: 10000
+  wandb_project: "${wandb.project}"
+  wandb_user: "${wandb.user}"
+
+SET-UP:
+  seed: 42
+  local_device_ids: [0]
