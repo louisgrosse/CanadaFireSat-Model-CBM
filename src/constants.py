@@ -29,6 +29,7 @@ BANDS_ALL = [
     "B11",
     "B12",
 ]  # Keep in order between all and subsplits
+
 BANDS_10 = ["B4", "B3", "B2", "B8"]
 BANDS_20 = ["B5", "B6", "B7", "B8A", "B11", "B12"]
 BANDS_60 = ["B1", "B9", "B10"]

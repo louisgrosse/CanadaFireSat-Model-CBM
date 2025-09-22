@@ -18,6 +18,7 @@ from src.eval.utils import get_pr_auc_scores
 from src.models.convlstm import ConvLSTMNet
 from src.models.resnet import ResNetConvLSTM
 from src.models.vit import ViTFactorizeModel, ViTModel
+from src.models.msclip_factorize_model import MSClipFactorizeModel
 from src.utils.torch_utils import get_alpha, get_trainable_params
 
 
@@ -61,6 +62,8 @@ class ImgModule(LightningModule):
             return ViTModel(**model_config)
         if model_config["architecture"] == "ViTFacto":
             return ViTFactorizeModel(**model_config)
+        if model_config["architecture"] == "MSClipFacto":
+            return MSClipFactorizeModel(**model_config)
         raise NameError(f"Model architecture {model_config['architecture']} not found")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

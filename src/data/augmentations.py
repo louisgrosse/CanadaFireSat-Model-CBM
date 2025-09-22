@@ -624,8 +624,10 @@ class CutOrPad(object):
             )
         elif self.mode == "tab":
             sample["tab_inputs"], sample["mask"] = self.pad_or_cut(sample["tab_inputs"], sample["mask"])
+
         else:
             raise ValueError("mode must be either 'image' or 'env'")
+        
         return sample
 
     def pad_or_cut(self, tensor: torch.Tensor, mask_tensor: torch.Tensor = None, dtype=torch.float32) -> Tuple[torch.Tensor]:

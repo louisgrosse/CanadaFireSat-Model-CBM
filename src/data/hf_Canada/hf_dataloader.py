@@ -55,6 +55,7 @@ def get_dataloader(
     Returns:
        torch.utils.data.DataLoader: SITS Dataloader
     """
+    print("[DEBUG] entering get_dataloader", split)
 
     dataset = SatImDataset(
         data_dir=data_dir, transform=transform, split=split, return_paths=return_paths, bands=bands, with_loc=with_loc
@@ -123,7 +124,7 @@ class SatImDataset(Dataset):
             NotImplementedError: Mixing bands across bands group is not possible
             NotImplementedError: Mixing bands across bands group is not possible
         """
-
+        
         data_dir = Path(data_dir)
         split_patterns = {"train": "train-*.parquet", "val": "validation-*.parquet", "test": "test-*.parquet"}
 
@@ -207,7 +208,7 @@ class SatImDataset(Dataset):
 
         if self.return_paths:
             return sample, img_name_info
-
+        
         return sample
 
     def __fastadapt__(self, idx) -> Tuple[Dict[str, np.ndarray], Dict[str, str]]:

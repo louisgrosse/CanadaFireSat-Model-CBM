@@ -43,6 +43,7 @@ class SatDataModule(LightningDataModule):
             model_config=model_config, is_training=False, is_eval=True, **kwargs
         )
 
+
     def __len__(self):
         return len(self.train_dataloader().dataset)
 

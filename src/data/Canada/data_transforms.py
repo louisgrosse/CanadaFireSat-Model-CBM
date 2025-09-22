@@ -110,7 +110,7 @@ def Canada_segmentation_transform(
 
         if with_doy:
             img_transform_list.append(TileDates(H=model_config["img_res"], W=model_config["img_res"], doy_bins=None))
-
+        
         img_transform_list.append(CutOrPad(max_seq_len=model_config["train_max_seq_len"], sampling_type="random"))
         img_transform_list.append(UnkMask(unk_class=-999, ground_truth_target="labels"))
         img_transform_list.append(ToTHWC())
@@ -155,7 +155,6 @@ def Canada_segmentation_transform(
     total_transform_list = band_transform_list + img_transform_list
 
     return transforms.Compose(total_transform_list)
-
 
 
 def TabCanada_segmentation_transform(
