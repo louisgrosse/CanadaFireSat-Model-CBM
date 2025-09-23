@@ -148,6 +148,7 @@ def evaluate(cfg: DictConfig):
                     "TabResNetConvLSTM",
                     "TabViTFactorizeModel",
                     "MultiViTFactorizeModel",
+                    "MSClipFacto",
                 ]:
 
                     sample = data[0]
