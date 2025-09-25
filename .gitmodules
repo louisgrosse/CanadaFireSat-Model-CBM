@@ -4,3 +4,6 @@
 [submodule "MS-CLIP"]
 	path = MS-CLIP
 	url = https://github.com/IBM/MS-CLIP
+[submodule "DeepSatModels"]
+	path = DeepSatModels
+	url = https://github.com/hugoporta/DeepSatModels
