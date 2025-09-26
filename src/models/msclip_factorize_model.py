@@ -10,31 +10,18 @@ from msclip.inference.utils import build_model
 from src.models.convlstm import ConvLSTM  # kept in case you later use it
 
 
-class TemporalEncoderSeq(nn.Module):
-    """Transformer over temporal dimension: [B, T, D] -> [B, D]."""
-    def __init__(self, embed_dim, num_heads=8, num_layers=2, dropout=0.1, pool="mean"):
+class TemporalAttention(nn.Module):
+    def __init__(self, embed_dim, num_heads=4, dropout=0.1):
         super().__init__()
-        enc_layer = nn.TransformerEncoderLayer(
-            d_model=embed_dim, nhead=num_heads, dim_feedforward=embed_dim * 4,
-            dropout=dropout, activation='gelu', batch_first=True
-        )
-        self.encoder = nn.TransformerEncoder(enc_layer, num_layers=num_layers)
-        self.pool = pool
+        self.attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
+        self.norm = nn.LayerNorm(embed_dim)
 
-        # Optional learned temporal CLS token if you prefer "cls" pooling later
-        if pool == "cls":
-            self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-            nn.init.trunc_normal_(self.cls_token, std=0.02)
+    def forward(self, x):
+        # x: [B*P, T, D]
+        attn_out, _ = self.attn(x, x, x)
+        x = self.norm(attn_out + x)   # residual + norm
+        return x.mean(dim=1)          # average across time
 
-    def forward(self, x):  # x: [B, T, D]
-        if self.pool == "cls":
-            B = x.size(0)
-            cls_tok = self.cls_token.expand(B, -1, -1)
-            x = torch.cat([cls_tok, x], dim=1)  # [B, 1+T, D]
-        x = self.encoder(x)  # [B, T, D] or [B, 1+T, D]
-        if self.pool == "cls":
-            return x[:, 0, :]  # [B, D]
-        return x.mean(dim=1)   # [B, D]
 
 
 class MSClipFactorizeModel(nn.Module):
@@ -51,11 +38,14 @@ class MSClipFactorizeModel(nn.Module):
         temp_depth=2,
         use_conv_decoder=True,      # kept for future dense head
         freeze_msclip=True,
+        use_doy=True,
         image_size: int = 224,
         model_config: Dict[str, Any] = None,
         **kwargs,
     ):
         super().__init__()
+
+        self.use_doy = use_doy
         self.image_size = image_size
         self.patch_size = patch_size
         # 1) Build MS-CLIP (LightningModule with inference_vision)
@@ -103,32 +93,22 @@ class MSClipFactorizeModel(nn.Module):
                 f"Grid mismatch: got {num_patches} tokens ({'with' if self.has_cls_token else 'no'} CLS), " \
                 f"but H_patch*W_patch={self.H_patch*self.W_patch}"
 
-        
-        
+        if self.use_doy:
+            self.doy_proj = nn.Conv2d(1, self.embed_dim, kernel_size=1)
+
+
         # 3) Temporal encoder (sequence over T)
         if temp_enc_type == "attention":
-            self.temp_enc = TemporalEncoderSeq(embed_dim=self.embed_dim, num_heads=8, num_layers=temp_depth, dropout=0.1, pool="mean")
+            self.temp_enc = TemporalAttention(embed_dim=self.embed_dim, num_heads=8, dropout=0.1)
         elif temp_enc_type == "convlstm":
 
             raise NotImplementedError("ConvLSTM with CLS features is not supported. Use temp_enc_type='attention'.")
         else:
             raise ValueError(f"Unknown temp_enc_type: {temp_enc_type}")
 
-        # Always use this for segmentation head in future
-        if self.use_conv_decoder:
-            # Conv decoder: take [B, D, H_p, W_p] → [B, num_classes, H_p, W_p]
-            self.conv_decoder = nn.Sequential(
-                nn.Conv2d(self.embed_dim, self.embed_dim // 2, kernel_size=3, padding=1),
-                nn.BatchNorm2d(self.embed_dim // 2),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(self.embed_dim // 2, self.num_classes, kernel_size=1),
-            )
-        else:
-            # Classification head
-            self.conv_decoder = None
-            self.head = nn.Linear(self.embed_dim, self.num_classes)
+        self.head = nn.Conv2d(self.embed_dim, num_classes, 1)
 
-    def forward(self, batch):
+    def forward(self, batch, doy=None):
         # Input: [B, T, H, W, C]
         x = batch
         B, T, H, W, C = x.shape
@@ -137,7 +117,7 @@ class MSClipFactorizeModel(nn.Module):
         x = x.permute(0, 1, 4, 2, 3).reshape(B*T, C, H, W)
 
         # Ensure number of channels matches MS-CLIP
-        if x.shape[1] > 10:  
+        if x.shape[1] > 10:
             x = x[:, :10, :, :]
 
         # === MS-CLIP patch embeddings ===
@@ -157,7 +137,7 @@ class MSClipFactorizeModel(nn.Module):
         # Flatten patches into batch: [B*P, T, D]
         patch_feats = patch_feats.view(B * self.num_patches, T, self.embed_dim)
 
-        # === Temporal encoding ===
+        # === Temporal encoding (attention only) ===
         patch_feats = self.temp_enc(patch_feats)   # [B*P, D]
 
         # Reshape back: [B, P, D]
@@ -167,12 +147,31 @@ class MSClipFactorizeModel(nn.Module):
         patch_feats = patch_feats.view(B, self.H_patch, self.W_patch, self.embed_dim)
         patch_feats = patch_feats.permute(0, 3, 1, 2).contiguous()
 
-        # === Decode segmentation map ===
-        if self.use_conv_decoder:
-            out = self.conv_decoder(patch_feats)  # [B, num_classes, H_p, W_p]
-            # Upsample to ground-truth resolution
-            out = F.interpolate(out, size=(self.out_H, self.out_W), mode="bilinear", align_corners=False)
-        else:
-            out = self.head(patch_feats.mean(dim=[2, 3]))
+            # === Inject DOY here ===
+        if self.use_doy and doy is not None:
+            doy = doy.float().to(patch_feats.device)  # [B, T, H, W, 1]
+
+            if doy.ndim == 5:  # [B, T, H, W, 1]
+                doy = doy[:, -1, ...]   # take last timestep → [B, H, W, 1]
+
+            # Now [B, H, W, 1] → [B, 1, H, W]
+            doy = doy.permute(0, 3, 1, 2).contiguous()  
+
+            # Downsample to patch grid size [B, 1, H_p, W_p]
+            doy = F.interpolate(doy, size=(self.H_patch, self.W_patch), mode="bilinear", align_corners=False)
+
+            # Project to embedding dimension
+            doy_feat = self.doy_proj(doy)  # [B, embed_dim, H_p, W_p]
+
+            # Add to patch features
+            patch_feats = patch_feats + doy_feat
+
+
+
+        # === Lightweight segmentation head (1x1 conv) ===
+        out = self.head(patch_feats)  # [B, num_classes, H_p, W_p]
+
+        # Upsample to ground-truth resolution
+        out = F.interpolate(out, size=(self.out_H, self.out_W), mode="bilinear", align_corners=False)
 
         return out

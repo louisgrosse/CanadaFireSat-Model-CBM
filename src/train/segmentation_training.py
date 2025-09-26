@@ -9,8 +9,8 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
-from deepsat.utils.config_files_utils import copy_yaml
-from deepsat.utils.torch_utils import get_device
+from DeepSatModels.utils.config_files_utils import copy_yaml
+from DeepSatModels.utils.torch_utils import get_device
 from src.constants import CONFIG_PATH
 from src.data import get_data
 from src.data.Canada.callback import FWICallback, WeightLossCallback, SwitchAllCallback

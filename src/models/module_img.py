@@ -8,11 +8,11 @@ import torch
 from pytorch_lightning import LightningModule
 from torch import nn
 
-from deepsat.metrics.loss_functions import get_loss
-from deepsat.metrics.numpy_metrics import get_classification_metrics
-from deepsat.metrics.torch_metrics import get_binary_metrics, get_mean_metrics
-from deepsat.models.TSViT.TSViTdense import TSViTDown
-from deepsat.utils.lr_scheduler import build_scheduler_pytorch
+from DeepSatModels.metrics.loss_functions import get_loss
+from DeepSatModels.metrics.numpy_metrics import get_classification_metrics
+from DeepSatModels.metrics.torch_metrics import get_binary_metrics, get_mean_metrics
+from DeepSatModels.models.TSViT.TSViTdense import TSViTDown
+from DeepSatModels.utils.lr_scheduler import build_scheduler_pytorch
 from src.data.utils import segmentation_ground_truths
 from src.eval.utils import get_pr_auc_scores
 from src.models.convlstm import ConvLSTMNet
@@ -86,7 +86,7 @@ class ImgModule(LightningModule):
             self.log("train_class_loss", class_loss, on_step=True, on_epoch=False, prog_bar=True, logger=True)
             self.log("alpha", alpha, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         else:
-            outputs = self.model(batch["inputs"])
+            outputs = self.model(batch["inputs"],batch["doy"])
             seg_weight = 1
 
         outputs = outputs.permute(0, 2, 3, 1)
@@ -125,7 +125,7 @@ class ImgModule(LightningModule):
             loss += alpha * class_loss
             seg_weight = 1 - alpha
         else:
-            logits = self.model(batch["inputs"])
+            logits = self.model(batch["inputs"],batch["doy"])
             seg_weight = 1
             class_loss = torch.tensor(0)
 

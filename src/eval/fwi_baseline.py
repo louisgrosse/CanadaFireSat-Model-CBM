@@ -15,7 +15,7 @@ from rasterio.windows import Window, from_bounds
 from torch.nn import functional as F
 from tqdm import tqdm
 
-from deepsat.metrics.numpy_metrics import get_classification_metrics
+from DeepSatModels.metrics.numpy_metrics import get_classification_metrics
 from src.constants import (
     CANADA_REF_COLS,
     CONFIG_PATH,

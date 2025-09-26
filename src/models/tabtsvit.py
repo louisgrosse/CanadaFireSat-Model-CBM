@@ -8,7 +8,7 @@ from einops import repeat
 from einops.layers.torch import Rearrange
 from torch import nn
 
-from deepsat.models.TSViT.TSViTdense import Transformer
+from DeepSatModels.models.TSViT.TSViTdense import Transformer
 
 
 class TabProjection(nn.Module):

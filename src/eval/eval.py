@@ -9,7 +9,7 @@ from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning import seed_everything
 from tqdm import tqdm
 
-from deepsat.metrics.numpy_metrics import get_classification_metrics
+from DeepSatModels.metrics.numpy_metrics import get_classification_metrics
 from src.constants import CONFIG_PATH
 from src.data import get_data
 from src.data.utils import segmentation_ground_truths

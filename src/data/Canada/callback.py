@@ -5,7 +5,7 @@ from typing import Any, Dict
 import torch
 from pytorch_lightning import Callback, LightningModule, Trainer
 
-from deepsat.metrics.loss_functions import get_loss
+from DeepSatModels.metrics.loss_functions import get_loss
 
 
 class SwitchAllCallback(Callback):

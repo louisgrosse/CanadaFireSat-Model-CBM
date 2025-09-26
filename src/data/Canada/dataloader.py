@@ -222,7 +222,6 @@ class SatImDataset(Dataset):
 
     def __getitem__(self, idx):
         
-        print("-------------------------------------<<<<<<<<<<<<<<<>>>>>>>>>>>>>-----------------------------------")
         # If idx is a tensor, convert it to a list
         if torch.is_tensor(idx):
             idx = idx.tolist()
@@ -305,13 +304,9 @@ class SatImDataset(Dataset):
 
 
 def my_collate(batch):
-    # filter bad masks
+    "Filter out sample where mask is zero everywhere"
     idx = [b["unk_masks"].sum(dim=(0, 1, 2)) != 0 for b in batch]
     batch = [b for i, b in enumerate(batch) if idx[i]]
+    return torch.utils.data.dataloader.default_collate(batch)
 
-    # manually handle doy
-    doys = [b.pop("doy") for b in batch]  # remove
-    batch = torch.utils.data.dataloader.default_collate(batch)
-    batch["doy"] = doys  # keep as list
-    return batch
 

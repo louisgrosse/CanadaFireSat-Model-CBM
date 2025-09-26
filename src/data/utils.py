@@ -12,7 +12,7 @@ from PIL import Image
 from src.constants import BANDS_10, BANDS_20, BANDS_60
 
 
-# Adapted from deepsat.data
+# Adapted from DeepSatModels.data
 def segmentation_ground_truths(sample: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
     labels = sample["labels"]
     if "unk_masks" in sample.keys():

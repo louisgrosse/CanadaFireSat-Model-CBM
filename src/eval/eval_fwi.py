@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from omegaconf import DictConfig
 
-from deepsat.metrics.numpy_metrics import get_classification_metrics
+from DeepSatModels.metrics.numpy_metrics import get_classification_metrics
 from src.constants import CONFIG_PATH
 from src.eval.utils import get_pr_auc_scores
 

@@ -9,7 +9,7 @@ from matplotlib import pyplot as plt
 from omegaconf import DictConfig
 from tqdm import tqdm
 
-from deepsat.metrics.numpy_metrics import get_classification_metrics
+from DeepSatModels.metrics.numpy_metrics import get_classification_metrics
 from src.constants import CONFIG_PATH
 
 

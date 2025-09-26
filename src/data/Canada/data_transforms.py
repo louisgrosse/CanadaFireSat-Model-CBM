@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 import numpy as np
 from torchvision import transforms
 
-from deepsat.data.PASTIS24.data_transforms import TileDates, UnkMask
+from DeepSatModels.data.PASTIS24.data_transforms import TileDates, UnkMask
 from src.constants import (
     BANDS_ALL,
     ENV_SOURCE_COLS,
@@ -109,7 +109,12 @@ def Canada_segmentation_transform(
             img_transform_list.append(TileLocs())
 
         if with_doy:
-            img_transform_list.append(TileDates(H=model_config["img_res"], W=model_config["img_res"], doy_bins=None))
+            img_transform_list.append(TileDates(
+                H=model_config["img_res"], 
+                W=model_config["img_res"], 
+                max_seq_len=model_config["train_max_seq_len"] if is_training else model_config.get("val_max_seq_len", None)
+                )
+            )   
         
         img_transform_list.append(CutOrPad(max_seq_len=model_config["train_max_seq_len"], sampling_type="random"))
         img_transform_list.append(UnkMask(unk_class=-999, ground_truth_target="labels"))
@@ -131,7 +136,12 @@ def Canada_segmentation_transform(
             img_transform_list.append(TileLocs())
 
         if with_doy:
-            img_transform_list.append(TileDates(H=model_config["img_res"], W=model_config["img_res"], doy_bins=None))
+            img_transform_list.append(TileDates(
+                H=model_config["img_res"], 
+                W=model_config["img_res"], 
+                max_seq_len=model_config["train_max_seq_len"] if is_training else model_config.get("val_max_seq_len", None)
+                )
+            )
 
         if not is_eval:
             img_transform_list.append(

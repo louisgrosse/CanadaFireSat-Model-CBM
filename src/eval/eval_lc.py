@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 
-from deepsat.metrics.numpy_metrics import get_classification_metrics
+from DeepSatModels.metrics.numpy_metrics import get_classification_metrics
 from src.constants import CONFIG_PATH, LAND_COVER_DICT_IDS, LAND_COVER_FOLDERS
 from src.data import get_data
 from src.eval.utils import get_pr_auc_scores

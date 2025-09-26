@@ -202,7 +202,7 @@ class SatImDataset(Dataset):
             idx = idx.item()
 
         sample, img_name_info = self.__fastadapt__(idx)
-
+        
         if self.transform:
             sample = self.transform(sample)
 

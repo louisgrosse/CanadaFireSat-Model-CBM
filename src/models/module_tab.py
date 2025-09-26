@@ -8,10 +8,10 @@ import torch
 from pytorch_lightning import LightningModule
 from torch import nn
 
-from deepsat.metrics.loss_functions import get_loss
-from deepsat.metrics.numpy_metrics import get_classification_metrics
-from deepsat.metrics.torch_metrics import get_binary_metrics, get_mean_metrics
-from deepsat.utils.lr_scheduler import build_scheduler_pytorch
+from DeepSatModels.metrics.loss_functions import get_loss
+from DeepSatModels.metrics.numpy_metrics import get_classification_metrics
+from DeepSatModels.metrics.torch_metrics import get_binary_metrics, get_mean_metrics
+from DeepSatModels.utils.lr_scheduler import build_scheduler_pytorch
 from src.data.utils import segmentation_ground_truths
 from src.eval.utils import get_pr_auc_scores
 from src.models.convlstm import TabConvLSTMNet
