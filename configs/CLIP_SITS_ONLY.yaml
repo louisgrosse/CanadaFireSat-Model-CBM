@@ -15,11 +15,13 @@ MODEL:
   num_classes: 2
   channels: 10
   threshold: 0.5
+  use_cls_fusion: true
   out_H: 25
   out_W: 25
   temp_enc_type: "attention"   # or "convlstm"
   temp_depth: 2
   use_conv_decoder: true
+  use_lssa: true
   freeze_msclip: true
 
 SOLVER:
@@ -66,7 +68,7 @@ DATASETS:
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "CLIP_SITS_ONLY_DOY_FIXED"
+  experiment_name: "CLIP_SITS_ONLY_DOY_WITH_CLS_LSSA"
   save_path: "./results/models"
   train_metrics_steps: 200
   save_steps: 10000
