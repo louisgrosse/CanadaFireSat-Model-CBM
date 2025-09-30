@@ -15,19 +15,11 @@ from src.constants import CONFIG_PATH
 def download(cfg: DictConfig):
     """Download the main parquet files"""
 
-    if '.' in cfg.split:
-        dataset_repo = "EPFL-ECEO/CanadaFireSat"
-        if cfg.split is not None:
-            filename_pattern = re.compile(rf"{cfg.split}")  # Customize your pattern
-            print(filename_pattern)
-        else:
-            filename_pattern = re.compile(r".*\.parquet")
+    dataset_repo = "EPFL-ECEO/CanadaFireSat"
+    if cfg.split is not None:
+        filename_pattern = re.compile(rf"{cfg.split}-.*\.parquet")  # Customize your pattern
     else:
-        dataset_repo ="EPFL-ECEO/CanadaFireSat"
-        if cfg.split is not None:
-            filename_pattern = re.compile(rf".*-{cfg.split}-.*\.parquet")
-        else:
-            filename_pattern = re.compile(r".*\.parquet")
+        filename_pattern = re.compile(r".*\.parquet")
 
     # List files in dataset repo
     all_files = list_repo_files(repo_id=dataset_repo, repo_type="dataset")

@@ -2,6 +2,6 @@ defaults:
   - _self_
   - global_config
 
-regions: ["metadata"]
-split: "bands_std.json"
-output_dir: "${paths.bands_std}"
+regions: ["Alberta"]
+split: "validation"
+output_dir: "${paths.hf_data}"

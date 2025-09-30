@@ -169,6 +169,14 @@ cython_debug/
 /boreal_data
 /VITS_data
 
+# Ignore Sen2Cor installer & extracted folder
+Sen2Cor-02.09.00-Linux64.run
+Sen2Cor-02.09.00-Linux64/
+
+# Ignore ESA aux data tarball & folder
+ESACCI-LC-L4-ALL-FOR-SEN2COR-2.10.tar.gz
+ESACCI-LC-L4-ALL-FOR-SEN2COR-2.10/
+
 # Pylance config file
 pyrightconfig.json
 

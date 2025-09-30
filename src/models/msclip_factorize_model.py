@@ -26,103 +26,134 @@ class TemporalAttention(nn.Module):
 
 class LocalScopeSelfAttention(nn.Module):
     """
-    Local (k x k) masked self-attention over the spatial patch grid, per frame.
-    Input:  x [B, T, H, W, D]
-    Output: y [B, T, H, W, D]
+    Swin-style 2D windowed self-attention (no shift, no MLP), per frame.
+    Operates on the patch grid, within fixed windows of size w x w.
+
+    Input : x [B, T, H, W, D]  (patch grid per frame)
+    Output: y [B, T, H, W, D]  (same shape)
+
+    Notes:
+    - If H or W is not divisible by window_size, we pad (like Swin) then unpad.
+    - For interpretability, relative position bias is optional (off by default).
+    - This is intentionally minimal: LN -> QKV -> MHSA (within windows) -> proj + residual.
     """
-    def __init__(self, embed_dim, num_heads=4, k=3, dropout=0.1):
+
+    def __init__(self, embed_dim, num_heads=4, window_size=7, dropout=0.0, use_rel_pos_bias=False):
         super().__init__()
-        assert k % 2 == 1, "k must be odd"
         assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
-        self.D = embed_dim
-        self.k = k
+        self.embed_dim = embed_dim
         self.num_heads = num_heads
-        self.q_proj = nn.Linear(embed_dim, embed_dim)
-        self.k_proj = nn.Linear(embed_dim, embed_dim)
-        self.v_proj = nn.Linear(embed_dim, embed_dim)
-        self.out_proj = nn.Linear(embed_dim, embed_dim)
-        self.attn_drop = nn.Dropout(dropout)
-        self.proj_drop = nn.Dropout(dropout)
+        self.head_dim = embed_dim // num_heads
+        self.window_size = window_size
+        self.scale = self.head_dim ** -0.5
+
         self.norm = nn.LayerNorm(embed_dim)
-        self._idx_cache: Dict[Tuple[int,int,int], torch.Tensor] = {}  # (H,W,device_idx)->indices
+        self.qkv = nn.Linear(embed_dim, embed_dim * 3, bias=True)
+        self.attn_drop = nn.Dropout(dropout)
+        self.proj = nn.Linear(embed_dim, embed_dim)
+        self.proj_drop = nn.Dropout(dropout)
 
-    @torch.no_grad()
-    def _build_indices(self, H, W, device):
-        # For each (h,w), gather indices of its kxk neighborhood
-        r = self.k // 2
-        coords = torch.stack(torch.meshgrid(
-            torch.arange(H, device=device),
-            torch.arange(W, device=device), indexing='ij'), dim=-1)  # [H,W,2]
-        nbrs = []
-        for dh in range(-r, r+1):
-            for dw in range(-r, r+1):
-                nh = (coords[...,0] + dh).clamp(0, H-1)
-                nw = (coords[...,1] + dw).clamp(0, W-1)
-                nbrs.append(nh * W + nw)
-        idx = torch.stack(nbrs, dim=0)  # [K, H, W]
-        return idx.view(self.k*self.k, H*W)  # [K, N]
+        self.use_rel_pos_bias = use_rel_pos_bias
+        if use_rel_pos_bias:
+            Wh = Ww = window_size
+            self.relative_position_bias_table = nn.Parameter(
+                torch.zeros((2 * Wh - 1) * (2 * Ww - 1), num_heads)
+            )
+            # precompute pairwise relative position index
+            coords_h = torch.arange(Wh)
+            coords_w = torch.arange(Ww)
+            coords = torch.stack(torch.meshgrid(coords_h, coords_w, indexing='ij'))  # [2,Wh,Ww]
+            coords_flat = torch.flatten(coords, 1)  # [2, Wh*Ww]
+            rel = coords_flat[:, :, None] - coords_flat[:, None, :]  # [2, Wh*Ww, Wh*Ww]
+            rel = rel.permute(1, 2, 0).contiguous()                   # [Wh*Ww, Wh*Ww, 2]
+            rel[:, :, 0] += Wh - 1
+            rel[:, :, 1] += Ww - 1
+            rel[:, :, 0] *= (2 * Ww - 1)
+            relative_position_index = rel.sum(-1)                     # [Wh*Ww, Wh*Ww]
+            self.register_buffer("relative_position_index", relative_position_index)
+            nn.init.trunc_normal_(self.relative_position_bias_table, std=0.02)
 
-    def _get_indices(self, H, W, device):
-        key = (H, W, device.index if device.type == "cuda" else -1)
-        if key not in self._idx_cache:
-            self._idx_cache[key] = self._build_indices(H, W, device)
-        return self._idx_cache[key]
+    @staticmethod
+    def window_partition(x, window_size):
+        # x: [B, H, W, D] -> [B*nW, w, w, D]
+        B, H, W, D = x.shape
+        x = x.view(B, H // window_size, window_size, W // window_size, window_size, D)
+        windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, D)
+        return windows
+
+    @staticmethod
+    def window_reverse(windows, window_size, H, W):
+        # windows: [B*nW, w, w, D] -> [B, H, W, D]
+        B = int(windows.shape[0] / (H * W / window_size / window_size))
+        x = windows.view(B, H // window_size, W // window_size, window_size, window_size, -1)
+        x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
+        return x
+
+    def _attend_windows(self, xw):
+        """
+        xw: [B*nW, w*w, D]
+        returns: [B*nW, w*w, D]
+        """
+        BnW, N, C = xw.shape  # N = w*w
+        qkv = self.qkv(xw).reshape(BnW, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]   # [BnW, nH, N, Dh]
+
+        q = q * self.scale
+        attn = torch.matmul(q, k.transpose(-2, -1))  # [BnW, nH, N, N]
+
+        if self.use_rel_pos_bias:
+            # add relative biases per head
+            Wh = Ww = self.window_size
+            rel_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)]
+            rel_bias = rel_bias.view(Wh*Ww, Wh*Ww, -1).permute(2, 0, 1)  # [nH, N, N]
+            attn = attn + rel_bias.unsqueeze(0)  # broadcast over batch
+
+        attn = F.softmax(attn, dim=-1)
+        attn = self.attn_drop(attn)
+
+        xw = torch.matmul(attn, v)                       # [BnW, nH, N, Dh]
+        xw = xw.transpose(1, 2).reshape(BnW, N, C)       # [BnW, N, D]
+        xw = self.proj(xw)
+        xw = self.proj_drop(xw)
+        return xw
 
     def forward(self, x):
         # x: [B, T, H, W, D]
         B, T, H, W, D = x.shape
-        N = H * W
-        x_ = x.view(B*T, N, D)  # [BT, N, D]
-        x_norm = self.norm(x_)
+        w = self.window_size
 
-        Q = self.q_proj(x_norm)   # [BT, N, D]
-        K = self.k_proj(x_norm)
-        V = self.v_proj(x_norm)
+        # process each frame independently for clarity / interpretability
+        x = x.view(B*T, H, W, D)
+        x = self.norm(x)  # LayerNorm over channels at each patch
 
-        head_dim = D // self.num_heads
-        def split_heads(t):
-            return t.view(B*T, N, self.num_heads, head_dim).transpose(1, 2)
-        Qh, Kh, Vh = map(split_heads, (Q, K, V))  # each [BT, Hh, N, Dh]
+        # pad to multiples of window size (like Swin)
+        pad_r = (w - W % w) % w
+        pad_b = (w - H % w) % w
+        if pad_r or pad_b:
+            x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b))  # pad W then H
 
-        # --- Build neighbor indices ---
-        # self._get_indices returns [K, N] (neighbors per center token, flattened)
-        # We want [N, K] to index per-center token the list of neighbors.
-        idx = self._get_indices(H, W, x.device).permute(1, 0)  # [N, K]
-        Kwin = idx.shape[1]  # = k*k
+        Hp, Wp = x.shape[1], x.shape[2]  # padded sizes
 
-        # Expand to batch/heads and to match gather's "same-shape" requirement
-        # We'll create a dummy K-axis on the SOURCE, then gather along dim=2 (token axis).
-        # Source for gather: Kh_exp with shape [BT, Hh, N, K, Dh]
-        Kh_exp = Kh.unsqueeze(3).expand(B*T, self.num_heads, N, Kwin, head_dim)
-        Vh_exp = Vh.unsqueeze(3).expand(B*T, self.num_heads, N, Kwin, head_dim)
+        # partition windows
+        xw = self.window_partition(x, w)                # [B*nW, w, w, D]
+        xw = xw.view(-1, w*w, D)                        # [B*nW, N, D]
 
-        # Indices: [BT, Hh, N, K, Dh] (same shape as source), gathering along dim=2
-        idx_exp = (
-            idx.unsqueeze(0).unsqueeze(0)                   # [1,1,N,K]
-            .expand(B*T, self.num_heads, N, Kwin)        # [BT,Hh,N,K]
-            .unsqueeze(-1)                               # [BT,Hh,N,K,1]
-            .expand(B*T, self.num_heads, N, Kwin, head_dim)  # [BT,Hh,N,K,Dh]
-        )
+        # attention within windows
+        xw = self._attend_windows(xw)                   # [B*nW, N, D]
 
-        # Gather neighbors along the token axis (dim=2)
-        Kh_local = torch.gather(Kh_exp, 2, idx_exp)  # [BT, Hh, N, K, Dh]
-        Vh_local = torch.gather(Vh_exp, 2, idx_exp)  # [BT, Hh, N, K, Dh]
+        # merge windows
+        xw = xw.view(-1, w, w, D)                       # [B*nW, w, w, D]
+        x = self.window_reverse(xw, w, Hp, Wp)          # [B*T, Hp, Wp, D]
 
-        # Attention: Q against local K/V
-        # Qh:       [BT, Hh, N, Dh]
-        # Kh_local: [BT, Hh, N, K, Dh] -> transpose last two dims to [..., Dh, K]
-        scores = torch.matmul(Qh.unsqueeze(3), Kh_local.transpose(-1, -2)).squeeze(3)  # [BT, Hh, N, K]
-        scores = scores / (head_dim ** 0.5)
-        attn = F.softmax(scores, dim=-1)
-        attn = self.attn_drop(attn)
+        # unpad
+        if pad_r or pad_b:
+            x = x[:, :H, :W, :].contiguous()
 
-        # Weighted sum over K neighbors -> [BT, Hh, N, Dh]
-        out = torch.matmul(attn.unsqueeze(3), Vh_local).squeeze(3)  # [BT, Hh, N, Dh]
-        out = out.transpose(1, 2).contiguous().view(B*T, N, D)      # [BT, N, D]
-        out = self.proj_drop(self.out_proj(out))
-        out = out + x_  # residual
+        # residual (pre-norm)
+        # reshape back to [B, T, H, W, D]
+        out = x.view(B, T, H, W, D)
+        return out
 
-        return out.view(B, T, H, W, D)
 
 
 
@@ -141,6 +172,7 @@ class MSClipFactorizeModel(nn.Module):
         use_conv_decoder=True,
         freeze_msclip=True,
         use_doy=True,
+        lssa_window = 7,
         use_cls_fusion=False,
         # ---- NEW: LSSA config ----
         use_lssa: bool = False,
@@ -161,7 +193,6 @@ class MSClipFactorizeModel(nn.Module):
         self.use_cls_fusion = use_cls_fusion
         self.use_lssa = use_lssa
 
-        # 1) Build MS-CLIP
         msclip_model, preprocess, tokenizer = build_model(
             model_name=model_name, pretrained=True, ckpt_path=ckpt_path, device="cpu", channels=channels
         )
@@ -178,7 +209,6 @@ class MSClipFactorizeModel(nn.Module):
             for p in self.msclip_model.parameters():
                 p.requires_grad = False
 
-        # 2) Infer embed_dim and patch grid
         with torch.no_grad():
             dummy = torch.zeros(1, channels, 224, 224)
             patch_feats = self.image_encoder.get_patch_embeddings(dummy)  # [1, P, D]
@@ -199,24 +229,25 @@ class MSClipFactorizeModel(nn.Module):
         if self.use_doy:
             self.doy_proj = nn.Conv2d(1, self.embed_dim, kernel_size=1)
 
-        # 3) Optional spatial LSSA
         if self.use_lssa:
             self.lssa = LocalScopeSelfAttention(
-                embed_dim=self.embed_dim, num_heads=lssa_heads, k=lssa_k, dropout=lssa_dropout
+                embed_dim=self.embed_dim,
+                num_heads=lssa_heads,
+                window_size=lssa_window,   
+                dropout=lssa_dropout,
+                use_rel_pos_bias=False     # set True if you want Swin-like rel bias
             )
 
-        # 4) Temporal encoder for patch tokens
+
         if temp_enc_type == "attention":
             self.temp_enc = TemporalAttention(embed_dim=self.embed_dim, num_heads=8, dropout=0.1)
         else:
             raise ValueError(f"Unknown temp_enc_type: {temp_enc_type}")
 
-        # 5) Optional CLS temporal encoder
         if self.use_cls_fusion and self.has_cls_token:
             self.cls_temp_enc = TemporalAttention(embed_dim=self.embed_dim, num_heads=4, dropout=0.1)
             self.cls_fuse_proj = nn.Linear(self.embed_dim, self.embed_dim)
 
-        # 6) Segmentation head
         self.head = nn.Conv2d(self.embed_dim, num_classes, 1)
 
     def forward(self, batch, doy=None):
@@ -227,7 +258,6 @@ class MSClipFactorizeModel(nn.Module):
         if x.shape[1] > self.channels:
             x = x[:, :self.channels, :, :]
 
-        # === MS-CLIP patch + optional CLS embeddings ===
         with torch.no_grad() if self.freeze_msclip else torch.enable_grad():
             feats = self.image_encoder.get_patch_embeddings(x)  # [B*T, P(+1), D]
 
@@ -240,7 +270,6 @@ class MSClipFactorizeModel(nn.Module):
         # Reshape to [B, T, P, D]
         patch_feats = patch_feats.view(B, T, self.num_patches, self.embed_dim)
 
-        # === Inject DOY ===
         if self.use_doy and doy is not None:
             doy = doy.float().to(patch_feats.device)
             if doy.ndim == 5:
@@ -250,27 +279,23 @@ class MSClipFactorizeModel(nn.Module):
             doy_feat = doy_feat.permute(0, 2, 3, 1).reshape(B*T, self.num_patches, self.embed_dim)
             patch_feats = patch_feats + doy_feat.view(B, T, self.num_patches, self.embed_dim)
 
-        # === Optional Local Scope Self-Attention (spatial, per-frame) ===
         if self.use_lssa:
-            # [B,T,P,D] -> [B,T,H_p,W_p,D] -> LSSA -> [B,T,P,D]
             patch_feats = patch_feats.view(B, T, self.H_patch, self.W_patch, self.embed_dim)
-            patch_feats = self.lssa(patch_feats)  # spatial cleanup
+            patch_feats = self.lssa(patch_feats)        
             patch_feats = patch_feats.view(B, T, self.num_patches, self.embed_dim)
 
-        # === Temporal encoder over T (per-patch location) ===
+
         patch_feats = patch_feats.permute(0, 2, 1, 3).contiguous()         # [B,P,T,D]
         patch_feats = patch_feats.view(B * self.num_patches, T, self.embed_dim)
         patch_feats = self.temp_enc(patch_feats)                           # [B*P, D]
         patch_feats = patch_feats.view(B, self.num_patches, self.embed_dim)
 
-        # === CLS temporal encoder + fusion (optional) ===
         if self.use_cls_fusion and self.has_cls_token:
             cls_feats = cls_feats.view(B, T, self.embed_dim)               # [B, T, D]
             cls_feats = self.cls_temp_enc(cls_feats)                       # [B, D]
             cls_feats = self.cls_fuse_proj(cls_feats).unsqueeze(1)         # [B, 1, D]
             patch_feats = patch_feats + cls_feats                          # broadcast fusion
 
-        # === Grid reshape and head ===
         patch_feats = patch_feats.view(B, self.H_patch, self.W_patch, self.embed_dim)
         patch_feats = patch_feats.permute(0, 3, 1, 2).contiguous()         # [B,D,H_p,W_p]
 

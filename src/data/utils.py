@@ -11,6 +11,9 @@ from PIL import Image
 
 from src.constants import BANDS_10, BANDS_20, BANDS_60
 
+#from sen2chain import Tile
+
+import numpy as np
 
 # Adapted from DeepSatModels.data
 def segmentation_ground_truths(sample: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
