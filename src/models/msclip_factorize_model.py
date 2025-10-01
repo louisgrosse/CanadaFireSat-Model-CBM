@@ -294,11 +294,11 @@ class MSClipFactorizeModel(nn.Module):
             cls_feats = cls_feats.view(B, T, self.embed_dim)               # [B, T, D]
             cls_feats = self.cls_temp_enc(cls_feats)                       # [B, D]
             cls_feats = self.cls_fuse_proj(cls_feats).unsqueeze(1)         # [B, 1, D]
-            patch_feats = patch_feats + cls_feats                          # broadcast fusion
-
+            patch_feats = patch_feats + cls_feats                         
         patch_feats = patch_feats.view(B, self.H_patch, self.W_patch, self.embed_dim)
         patch_feats = patch_feats.permute(0, 3, 1, 2).contiguous()         # [B,D,H_p,W_p]
 
-        out = self.head(patch_feats)                                       # [B,num_classes,H_p,W_p]
-        out = F.interpolate(out, size=(self.out_H, self.out_W), mode="bilinear", align_corners=False)
+        out = self.head(patch_feats)  # [B, num_classes, H_p, W_p] (H_p = H//num_patches)
+        out = F.interpolate(out, size=(H, W), mode="bilinear", align_corners=False)
+
         return out

@@ -100,7 +100,7 @@ def Canada_segmentation_transform(
                 ground_truths=["labels"],
                 with_loc=with_loc,
             ),
-            DownSampleLab(out_H=model_config["out_H"], out_W=model_config["out_W"]),
+            #DownSampleLab(out_H=model_config["out_H"], out_W=model_config["out_W"]),
             HVFlip(hflip_prob=0.5, vflip_prob=0.5, with_loc=with_loc) if img_only else transforms.Lambda(lambda x: x),
             GaussianNoise(var_limit=(0.01, 0.1), p=0.5),
         ]
@@ -129,7 +129,7 @@ def Canada_segmentation_transform(
                 ground_truths=["labels"],
                 with_loc=with_loc,
             ),
-            DownSampleLab(out_H=model_config["out_H"], out_W=model_config["out_W"]),
+            #DownSampleLab(out_H=model_config["out_H"], out_W=model_config["out_W"]),
         ]
 
         if with_loc:

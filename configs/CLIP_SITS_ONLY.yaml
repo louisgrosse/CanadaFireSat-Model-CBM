@@ -15,7 +15,7 @@ MODEL:
   num_classes: 2
   channels: 10
   threshold: 0.5
-  use_cls_fusion: true
+  use_cls_fusion: false
   out_H: 25
   out_W: 25
   temp_enc_type: "attention" 
@@ -25,7 +25,7 @@ MODEL:
   freeze_msclip: true
 
 SOLVER:
-  num_epochs: 50
+  num_epochs: 15
   num_warmup_epochs: 2
   loss_function: masked_dice_loss
   lr_scheduler: 'cosine'
@@ -69,7 +69,7 @@ DATASETS:
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "CLIP_SITS_ONLY_DOY_WITH_CLS_SWIN_ONTARIO_AND_ALBERTA"
+  experiment_name: "CLIP_SITS_ONLY_DOY_SWIN_ONTARIO_AND_ALBERTA_NO_DS"
   save_path: "./results/models"
   train_metrics_steps: 200
   save_steps: 10000
