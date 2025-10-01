@@ -21,7 +21,6 @@ MODEL:
   temp_enc_type: "attention" 
   temp_depth: 2
   use_conv_decoder: true
-  use_lssa: true
   freeze_msclip: true
 
 SOLVER:
