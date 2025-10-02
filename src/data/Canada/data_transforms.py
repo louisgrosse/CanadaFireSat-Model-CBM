@@ -71,6 +71,7 @@ def Canada_segmentation_transform(
         transforms.Compose: Output tranformation pipeline
     """
 
+    ds_labels = model_config["ds_labels"]
     # Extract the mean and std from the files
     mean_array = extract_stats(mean_file, bands)
     std_array = extract_stats(std_file, bands)
@@ -85,7 +86,28 @@ def Canada_segmentation_transform(
 
     # Regularization Image Transforms
     if is_training:
-        img_transform_list = [
+        if ds_labels:
+            img_transform_list = [
+                Crop(
+                    img_size=model_config["input_img_res"],
+                    crop_size=model_config["img_res"],
+                    random=True,
+                    ground_truths=["labels"],
+                    with_loc=with_loc,
+                ),
+                ResizedCrop(
+                    out_size=model_config["img_res"],
+                    scale=(0.9, 1.0),
+                    prob=0.5,
+                    ground_truths=["labels"],
+                    with_loc=with_loc,
+                ),
+                DownSampleLab(out_H=model_config["out_H"], out_W=model_config["out_W"]),
+                HVFlip(hflip_prob=0.5, vflip_prob=0.5, with_loc=with_loc) if img_only else transforms.Lambda(lambda x: x),
+                GaussianNoise(var_limit=(0.01, 0.1), p=0.5),
+            ]
+        else:
+            img_transform_list = [
             Crop(
                 img_size=model_config["input_img_res"],
                 crop_size=model_config["img_res"],
@@ -100,7 +122,6 @@ def Canada_segmentation_transform(
                 ground_truths=["labels"],
                 with_loc=with_loc,
             ),
-            #DownSampleLab(out_H=model_config["out_H"], out_W=model_config["out_W"]),
             HVFlip(hflip_prob=0.5, vflip_prob=0.5, with_loc=with_loc) if img_only else transforms.Lambda(lambda x: x),
             GaussianNoise(var_limit=(0.01, 0.1), p=0.5),
         ]
@@ -121,16 +142,27 @@ def Canada_segmentation_transform(
         img_transform_list.append(ToTHWC())
 
     else:
-        img_transform_list = [
-            Crop(
-                img_size=model_config["input_img_res"],
-                crop_size=model_config["img_res"],
-                random=False,
-                ground_truths=["labels"],
-                with_loc=with_loc,
-            ),
-            #DownSampleLab(out_H=model_config["out_H"], out_W=model_config["out_W"]),
-        ]
+        if ds_labels:
+            img_transform_list = [
+                Crop(
+                    img_size=model_config["input_img_res"],
+                    crop_size=model_config["img_res"],
+                    random=False,
+                    ground_truths=["labels"],
+                    with_loc=with_loc,
+                ),
+                DownSampleLab(out_H=model_config["out_H"], out_W=model_config["out_W"]),
+            ]
+        else:
+            img_transform_list = [
+                Crop(
+                    img_size=model_config["input_img_res"],
+                    crop_size=model_config["img_res"],
+                    random=False,
+                    ground_truths=["labels"],
+                    with_loc=with_loc,
+                )
+            ]
 
         if with_loc:
             img_transform_list.append(TileLocs())
