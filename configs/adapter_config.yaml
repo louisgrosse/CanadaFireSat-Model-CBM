@@ -1,0 +1,37 @@
+defaults:
+  - _self_
+  - global_config
+
+MODEL:
+  msclip_model_name: "Llama3-MS-CLIP-Base"
+  msclip_ckpt: ""
+  channels: 10
+
+SOLVER:
+  num_epochs: 5
+  lr: 3e-4
+  weight_decay: 1e-4
+  dropout: 0.1
+
+DATASETS:
+  train:
+    data_dir: "/home/louis/Code/wildfire-forecast/worldstrat/train"
+    batch_size: 12
+    num_workers: 8
+  eval:
+    data_dir: "/home/louis/Code/wildfire-forecast/worldstrat/val"
+    batch_size: 12
+    num_workers: 8
+  kwargs:
+    mean_file: "${paths.bands_mean}"
+    std_file: "${paths.bands_std}"
+
+CHECKPOINT:
+  save_path: "./results/adapter"
+  experiment_name: "WorldStrat_L1C2L2A_Linear2"
+  wandb_project: "${wandb.project}"
+  wandb_user: "${wandb.user}"
+
+SETUP:
+  seed: 42
+  local_device_ids: [0]

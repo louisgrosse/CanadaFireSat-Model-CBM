@@ -5,8 +5,11 @@ import torch.nn.functional as F
 import sys
 from typing import Any, Dict
 
+from src.models.l1c2l2a_adapter import L1C2L2AAdapter
+
 sys.path.append('MS-CLIP')
 from msclip.inference.utils import build_model
+from msclip.inference.clearclip import maybe_patch_clearclip
 
 
 # -----------------------
@@ -91,6 +94,13 @@ class MSClipFactorizeModel(nn.Module):
         self.msclip_model   = msclip_model            
         self.image_encoder  = msclip_model.image_encoder  
 
+        if model_config is not None and "clearclip" in model_config:
+            num_patched = maybe_patch_clearclip(self.image_encoder, model_config["clearclip"])
+            if num_patched > 0:
+                print(f"[ClearCLIP] Patched last {num_patched} vision blocks "
+                    f"(keep_ffn={model_config['clearclip'].get('keep_ffn', False)}, "
+                    f"keep_residual={model_config['clearclip'].get('keep_residual', False)})")
+
         if freeze_msclip:
             for p in self.msclip_model.parameters():
                 p.requires_grad = False
@@ -111,6 +121,12 @@ class MSClipFactorizeModel(nn.Module):
                 self.has_cls_token = False
                 self.num_patches = num_patches
 
+        self.use_l1c2l2a_adapter = model_config.get("use_l1c2l2a_adapter", False)
+        self.l1c2l2a_dropout = model_config.get("l1c2l2a_dropout", 0.0)
+
+        if self.use_l1c2l2a_adapter:
+            self.l1c2l2a = L1C2L2AAdapter(dim=self.embed_dim, dropout=self.l1c2l2a_dropout)
+        
         # DOY encoder
         if self.use_doy:
             self.doy_embed = DOYEmbed(self.embed_dim)
@@ -148,6 +164,14 @@ class MSClipFactorizeModel(nn.Module):
 
         # [B, T, P, D]
         patch_feats = patch_feats.view(B, T, self.num_patches, self.embed_dim)
+
+        if self.use_l1c2l2a_adapter:
+            # flatten temporal or per-patch as needed
+            if patch_feats.ndim == 4:
+                B, T, P, D = patch_feats.shape
+                patch_feats = patch_feats.view(B*T, P, D)
+            patch_feats = self.l1c2l2a(patch_feats)
+
 
         # -----------------------
         # Temporal Encoding

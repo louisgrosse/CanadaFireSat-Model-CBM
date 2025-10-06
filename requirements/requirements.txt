@@ -76,3 +76,6 @@ datasets
 # FWI baseline
 rasterio
 xarray
+
+#Downlaod dataset
+pystac-client
