@@ -1,12 +1,12 @@
 from src.models.module_img import ImgModule
 from src.models.module_tab import TabModule
-from src.models.msclip_factorize_model import MSClipFactorizeModel
 import open_clip
+
 
 def get_model(config, device):
     arch = config['MODEL']['architecture']
 
-    if arch in ["TSViT", "ConvLSTM", "ResNet", "ViT", "ViTFacto","MSClipFacto"]:
+    if arch in ["TSViT", "ConvLSTM", "ResNet", "ViT", "ViTFacto","MSClipFacto","L1C2L2AAdapterModel"]:
         return ImgModule(config).to(device)
 
     elif arch in [

@@ -20,6 +20,7 @@ from src.models.resnet import ResNetConvLSTM
 from src.models.vit import ViTFactorizeModel, ViTModel
 from src.models.msclip_factorize_model import MSClipFactorizeModel
 from src.utils.torch_utils import get_alpha, get_trainable_params
+from src.models.l1c2l2a_adapter import L1C2L2AAdapterModel
 
 
 class ImgModule(LightningModule):
@@ -64,6 +65,8 @@ class ImgModule(LightningModule):
             return ViTFactorizeModel(**model_config)
         if model_config["architecture"] == "MSClipFacto":
             return MSClipFactorizeModel(**model_config)
+        if model_config["architecture"] == "L1C2L2AAdapterModel":
+            return L1C2L2AAdapterModel(**model_config)
         raise NameError(f"Model architecture {model_config['architecture']} not found")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

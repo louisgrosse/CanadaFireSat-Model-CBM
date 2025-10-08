@@ -16,7 +16,8 @@ MODEL:
   channels: 10
   threshold: 0.5
   use_cls_fusion: false
-  ds_labels: false
+  ds_labels: true
+  use_l1c2l2a_adapter: true
   out_H: 25
   out_W: 25
   temp_enc_type: "attention" 
@@ -24,8 +25,8 @@ MODEL:
   use_conv_decoder: true
   freeze_msclip: true
   clearclip:
-    enabled: true          # True/False to switch ClearCLIP on/off
-    apply_to_last_n: 1     
+    enabled: false          # True/False to switch ClearCLIP on/off
+    apply_to_last_n: 6     
     keep_ffn: false        # should be false for ClearCLIP
     keep_residual: false   # should be false for ClearCLIP
 
@@ -74,9 +75,9 @@ DATASETS:
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "ClearCLIP_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_NO_DS_LONG"
+  experiment_name: "CLIP_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter"
   save_path: "./results/models"
-  train_metrics_steps: 200
+  train_metrics_steps: 200 
   save_steps: 10000
   wandb_project: "${wandb.project}"
   wandb_user: "${wandb.user}"

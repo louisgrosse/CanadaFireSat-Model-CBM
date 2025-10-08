@@ -25,11 +25,8 @@ sys.path.append('MS-CLIP')
 from msclip.inference.utils import build_model
 
 
-# ------------------------------------------------------------
-# Adapter model
-# ------------------------------------------------------------
 class L1C2L2AAdapter(nn.Module):
-    """Linear transform in CLIP embedding space (D×D)."""
+    """Linear transform in CLIP embedding space (DxD)."""
     def __init__(self, dim, dropout=0.0):
         super().__init__()
         self.linear = nn.Linear(dim, dim)
@@ -41,9 +38,6 @@ class L1C2L2AAdapter(nn.Module):
         return x
 
 
-# ------------------------------------------------------------
-# Utils
-# ------------------------------------------------------------
 def load_stats(mean_path, std_path):
     with open(mean_path, "r") as f:
         mean_json = json.load(f)
@@ -67,9 +61,6 @@ def cosine_loss(a, b):
     return 1 - (a * b).sum(dim=-1).mean()
 
 
-# ------------------------------------------------------------
-# Streaming Dataset
-# ------------------------------------------------------------
 class WorldStratPairsStream(IterableDataset):
     def __init__(self, parquet_dir, mean, std, max_rows=None):
         super().__init__()
@@ -109,9 +100,7 @@ class WorldStratPairsStream(IterableDataset):
         return x_L1C, x_L2A
 
 
-# ------------------------------------------------------------
-# Training loop
-# ------------------------------------------------------------
+
 def train_adapter(cfg, msclip_encoder, adapter, train_loader, val_loader, device, wandb_logger):
     opt = torch.optim.AdamW(adapter.parameters(), lr=cfg["SOLVER"]["lr"], weight_decay=cfg["SOLVER"]["weight_decay"])
     num_epochs = cfg["SOLVER"]["num_epochs"]
@@ -135,7 +124,7 @@ def train_adapter(cfg, msclip_encoder, adapter, train_loader, val_loader, device
             e1c = adapter(e1)
             #loss_cos = cosine_loss(e1c, e2)
             loss_mse = F.mse_loss(e1c, e2)
-            loss = loss_mse  #loss_cos + 0.1 * loss_mse
+            loss = loss_mse  
 
             opt.zero_grad()
             loss.backward()
@@ -166,16 +155,12 @@ def train_adapter(cfg, msclip_encoder, adapter, train_loader, val_loader, device
     return adapter
 
 
-# ------------------------------------------------------------
-# Hydra entrypoint
-# ------------------------------------------------------------
 @hydra.main(version_base=None, config_path=str(CONFIG_PATH), config_name="adapter_config")
 def train_adapter_hydra(cfg: DictConfig):
     cfg = OmegaConf.to_container(cfg, resolve=True)
     seed_everything(cfg["SETUP"]["seed"])
     device = get_device(cfg["SETUP"]["local_device_ids"], allow_cpu=False)
 
-    # WandB setup
     wandb_logger = WandbLogger(
         project=cfg["CHECKPOINT"]["wandb_project"],
         entity=cfg["CHECKPOINT"]["wandb_user"],
@@ -184,7 +169,6 @@ def train_adapter_hydra(cfg: DictConfig):
     copy_yaml(cfg)
     wandb_logger.log_hyperparams(cfg)
 
-    # MS-CLIP
     print("Loading MS-CLIP...")
     msclip_model, _, _ = build_model(
         model_name=cfg["MODEL"]["msclip_model_name"],
@@ -198,20 +182,16 @@ def train_adapter_hydra(cfg: DictConfig):
 
     adapter = L1C2L2AAdapter(dim=embed_dim, dropout=cfg["SOLVER"]["dropout"])
 
-    # Load normalization
     mean, std = load_stats(cfg["DATASETS"]["kwargs"]["mean_file"], cfg["DATASETS"]["kwargs"]["std_file"])
 
-    # Datasets
     train_ds = WorldStratPairsStream(cfg["DATASETS"]["train"]["data_dir"], mean, std)
     val_ds = WorldStratPairsStream(cfg["DATASETS"]["eval"]["data_dir"], mean, std, max_rows=cfg["DATASETS"].get("val_max_rows", 1000))
     collate = lambda b: (torch.stack([x[0] for x in b]), torch.stack([x[1] for x in b]))
     train_loader = DataLoader(train_ds, batch_size=cfg["DATASETS"]["train"]["batch_size"], collate_fn=collate, num_workers=cfg["DATASETS"]["train"]["num_workers"])
     val_loader = DataLoader(val_ds, batch_size=cfg["DATASETS"]["eval"]["batch_size"], collate_fn=collate, num_workers=cfg["DATASETS"]["eval"]["num_workers"])
 
-    # Train
     adapter = train_adapter(cfg, encoder, adapter, train_loader, val_loader, device, wandb_logger)
 
-    # Save model
     Path(cfg["CHECKPOINT"]["save_path"]).mkdir(parents=True, exist_ok=True)
     out_ckpt = os.path.join(cfg["CHECKPOINT"]["save_path"], "l1c2l2a_linear.pt")
     torch.save(adapter.state_dict(), out_ckpt)

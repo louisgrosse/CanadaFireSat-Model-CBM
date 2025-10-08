@@ -28,9 +28,7 @@ TRAIN_RATIO = 0.8
 VAL_RATIO = 0.1
 TEST_RATIO = 0.1
 
-os.makedirs(os.path.join(OUT_ROOT, "train"), exist_ok=True)
-os.makedirs(os.path.join(OUT_ROOT, "val"), exist_ok=True)
-os.makedirs(os.path.join(OUT_ROOT, "test"), exist_ok=True)
+os.makedirs(os.path.join(OUT_ROOT, "data"), exist_ok=True)
 
 
 def serialize_array(arr):
@@ -74,16 +72,13 @@ def parse_date_from_filename(fname):
 def assign_split():
     r = random.random()
     if r < TRAIN_RATIO:
-        return "train"
+        return "data"
     elif r < TRAIN_RATIO + VAL_RATIO:
-        return "val"
+        return "data"
     else:
-        return "test"
+        return "data"
 
 
-# =====================================================
-# MAIN
-# =====================================================
 def create_parquet():
     pattern = os.path.join(L1C_DIR, "**/*-L1C_data.tiff")
     l1c_files = sorted(glob.glob(pattern, recursive=True))
@@ -153,7 +148,7 @@ def create_parquet():
             )
             df = pd.DataFrame(batch_records[split])
             pq.write_table(pa.Table.from_pandas(df), out_file)
-            print(f"💾 Wrote {len(batch_records[split])} records → {out_file}")
+            print(f"Wrote {len(batch_records[split])} records → {out_file}")
 
     print("\n Done — all split Parquet files saved under:", OUT_ROOT)
 

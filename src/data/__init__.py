@@ -2,6 +2,7 @@ from src.data.Canada.datamodule import EnvDataModule, SatDataModule, TabSatDataM
 from src.data.hf_Canada.hf_datamodule import EnvDataModule as HfEnvDataModule
 from src.data.hf_Canada.hf_datamodule import SatDataModule as HfSatDataModule
 from src.data.hf_Canada.hf_datamodule import TabSatDataModule as HfTabSatDataModule
+from src.data.hf_Canada.hf_datamodule import SatWorldStratDataModule
 
 
 def get_data(config):
@@ -23,6 +24,11 @@ def get_data(config):
     elif architecture in ["EnvResNet", "EnvViTFactorizeModel"]:
         datamodule_cls = HfEnvDataModule if config["DATASETS"].get("mode") == "huggingface" else EnvDataModule
     else:
-        datamodule_cls = HfSatDataModule if config["DATASETS"].get("mode") == "huggingface" else SatDataModule
+        if config["DATASETS"].get("mode") == "huggingface":
+            datamodule_cls = HfSatDataModule
+        elif config["DATASETS"].get("mode") == "worldstrat":
+            datamodule_cls = SatWorldStratDataModule
+        else:
+            datamodule_cls = SatDataModule
 
     return datamodule_cls(model_config=config["MODEL"], train_config=train_config, eval_config=eval_config, **kwargs)

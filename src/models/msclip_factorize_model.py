@@ -71,6 +71,8 @@ class MSClipFactorizeModel(nn.Module):
         ds_labels=False,
         use_cls_fusion=False,
         image_size: int = 224,
+        use_l1c2l2a_adapter: bool = False,
+        l1c2l2a_dropout: int = 0,
         model_config: Dict[str, Any] = None,
         **kwargs,
     ):
@@ -121,11 +123,13 @@ class MSClipFactorizeModel(nn.Module):
                 self.has_cls_token = False
                 self.num_patches = num_patches
 
-        self.use_l1c2l2a_adapter = model_config.get("use_l1c2l2a_adapter", False)
-        self.l1c2l2a_dropout = model_config.get("l1c2l2a_dropout", 0.0)
+        self.use_l1c2l2a_adapter = use_l1c2l2a_adapter
+        self.l1c2l2a_dropout = l1c2l2a_dropout
 
         if self.use_l1c2l2a_adapter:
             self.l1c2l2a = L1C2L2AAdapter(dim=self.embed_dim, dropout=self.l1c2l2a_dropout)
+            adapter_weights = torch.load("/home/louis/Code/wildfire-forecast/worldstrat/l1c2l2a_linear.pt", map_location="cpu")
+            self.l1c2l2a.load_state_dict(adapter_weights)
         
         # DOY encoder
         if self.use_doy:
@@ -172,10 +176,11 @@ class MSClipFactorizeModel(nn.Module):
                 patch_feats = patch_feats.view(B*T, P, D)
             patch_feats = self.l1c2l2a(patch_feats)
 
+        #print("-------------------->",B,P,T,D)
+        #print(patch_feats.shape)
 
-        # -----------------------
-        # Temporal Encoding
-        # -----------------------
+        patch_feats = patch_feats.view(B, T, P, D)
+
         patch_feats = patch_feats.permute(0, 2, 1, 3).contiguous()  # [B,P,T,D]
         patch_feats = patch_feats.view(B * self.num_patches, T, self.embed_dim)
 

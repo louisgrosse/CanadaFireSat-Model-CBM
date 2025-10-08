@@ -12,7 +12,7 @@ sys.path.append("MS-CLIP")
 from msclip.inference.utils import build_model
 
 # ---------------- CONFIG ----------------
-parquet_path = "/home/louis/Code/wildfire-forecast/worldstrat/train/worldstrat_train_0000.parquet" 
+parquet_path = "/home/louis/Code/wildfire-forecast/worldstrat/data/worldstrat_train_0001.parquet" 
 num_samples = 50               # subset for speed
 resize_to = 224
 channels = 10
