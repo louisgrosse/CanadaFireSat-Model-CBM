@@ -18,6 +18,7 @@ MODEL:
   use_cls_fusion: false
   ds_labels: true
   use_l1c2l2a_adapter: true
+  l1c2l2a_Adapter_loc: "${paths.l1c2l2a_Adapter_loc}"
   out_H: 25
   out_W: 25
   temp_enc_type: "attention" 
@@ -25,10 +26,14 @@ MODEL:
   use_conv_decoder: true
   freeze_msclip: true
   clearclip:
-    enabled: false          # True/False to switch ClearCLIP on/off
-    apply_to_last_n: 6     
+    enabled: false          
+    apply_to_last_n: 7     
     keep_ffn: false        # should be false for ClearCLIP
     keep_residual: false   # should be false for ClearCLIP
+    use_self_self_attn: true    
+    ss_attn_iter: 1             
+    ss_attn_temp: null          
+    override_forward_for_dense: true
 
 SOLVER:
   num_epochs: 20
@@ -75,7 +80,7 @@ DATASETS:
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "ClearCLIPatln6_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter"
+  experiment_name: "ClearCLIPatln6ssat_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter"
   save_path: "./results/models"
   train_metrics_steps: 200 
   save_steps: 10000

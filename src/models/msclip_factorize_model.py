@@ -73,6 +73,7 @@ class MSClipFactorizeModel(nn.Module):
         image_size: int = 224,
         use_l1c2l2a_adapter: bool = False,
         l1c2l2a_dropout: int = 0,
+        l1c2l2a_Adapter_loc:str = "",
         model_config: Dict[str, Any] = None,
         **kwargs,
     ):
