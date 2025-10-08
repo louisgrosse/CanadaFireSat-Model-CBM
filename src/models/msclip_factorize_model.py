@@ -175,11 +175,8 @@ class MSClipFactorizeModel(nn.Module):
                 B, T, P, D = patch_feats.shape
                 patch_feats = patch_feats.view(B*T, P, D)
             patch_feats = self.l1c2l2a(patch_feats)
+            patch_feats = patch_feats.view(B, T, P, D)
 
-        #print("-------------------->",B,P,T,D)
-        #print(patch_feats.shape)
-
-        patch_feats = patch_feats.view(B, T, P, D)
 
         patch_feats = patch_feats.permute(0, 2, 1, 3).contiguous()  # [B,P,T,D]
         patch_feats = patch_feats.view(B * self.num_patches, T, self.embed_dim)

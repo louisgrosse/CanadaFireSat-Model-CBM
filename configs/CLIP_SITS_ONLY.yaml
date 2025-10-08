@@ -75,7 +75,7 @@ DATASETS:
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "CLIP_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter"
+  experiment_name: "ClearCLIPatln6_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter"
   save_path: "./results/models"
   train_metrics_steps: 200 
   save_steps: 10000
