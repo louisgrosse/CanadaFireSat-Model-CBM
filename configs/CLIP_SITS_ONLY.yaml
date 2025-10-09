@@ -17,7 +17,7 @@ MODEL:
   threshold: 0.5
   use_cls_fusion: false
   ds_labels: true
-  use_l1c2l2a_adapter: true
+  use_l1c2l2a_adapter: false
   l1c2l2a_Adapter_loc: "${paths.l1c2l2a_Adapter_loc}"
   out_H: 25
   out_W: 25
@@ -26,8 +26,8 @@ MODEL:
   use_conv_decoder: true
   freeze_msclip: true
   clearclip:
-    enabled: false          
-    apply_to_last_n: 7     
+    enabled: true          
+    apply_to_last_n: 1     
     keep_ffn: false        # should be false for ClearCLIP
     keep_residual: false   # should be false for ClearCLIP
     use_self_self_attn: true    
@@ -80,7 +80,7 @@ DATASETS:
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "ClearCLIPatln6ssat_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter"
+  experiment_name: "ClearCLIPatln1ssat_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS"
   save_path: "./results/models"
   train_metrics_steps: 200 
   save_steps: 10000

@@ -1,0 +1,113 @@
+defaults:
+  - _self_
+  - global_config
+
+model_path: "./results/models/ClearCLIPatln6_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter/MSClipFacto-08-f1-0.21.ckpt" 
+config_name: "config_file.yaml"
+mode: "image"
+split: "val" # test
+output_dir: "./results/models/ClearCLIPatln6_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter/"
+seed: 42
+with_region: True
+fwi_ths: [5, 10, 20, 30]
+n_plots: 50
+size_plots: 6
+
+CHECKPOINT:
+  experiment_name: ClearCLIPatln6_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter
+  load_from_checkpoint: null
+  save_path: results/models/ClearCLIPatln6_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter
+  save_steps: 10000
+  train_metrics_steps: 200
+  wandb_project: wildfire-forecast
+  wandb_user: louis-grosse-epfl
+DATASETS:
+  convert_l1c_to_l2a: true
+  eval:
+    batch_size: 24
+    data_dir: /home/louis/Code/wildfire-forecast/hug_data/Ontario
+    num_workers: 8
+  kwargs:
+    bands:
+    - B2
+    - B3
+    - B4
+    - B5
+    - B6
+    - B7
+    - B8
+    - B8A
+    - B11
+    - B12
+    mean_file: /home/louis/Code/data/metadata/bands_mean.json
+    std_file: /home/louis/Code/data/metadata/bands_std.json
+    with_doy: true
+    with_loc: false
+  mode: huggingface
+  train:
+    batch_size: 24
+    data_dir: /home/louis/Code/wildfire-forecast/hug_data/Ontario
+    num_workers: 8
+MODEL:
+  architecture: MSClipFacto
+  channels: 10
+  clearclip:
+    apply_to_last_n: 6
+    enabled: false
+    keep_ffn: false
+    keep_residual: false
+  ds_labels: true
+  freeze_msclip: true
+  img_res: 224
+  input_dim: 10
+  input_img_res: 264
+  msclip_ckpt: ''
+  msclip_model_name: Llama3-MS-CLIP-Base
+  num_classes: 2
+  out_H: 25
+  out_W: 25
+  patch_size: 16
+  temp_depth: 2
+  temp_enc_type: attention
+  threshold: 0.5
+  train_max_seq_len: 5
+  use_cls_fusion: false
+  use_conv_decoder: true
+  use_l1c2l2a_adapter: true
+  val_max_seq_len: 5
+SET-UP:
+  local_device_ids:
+  - 0
+  seed: 42
+SOLVER:
+  accumulate_grad_batches: 3
+  loss_function: masked_dice_loss
+  lr_base: 5.0e-05
+  lr_min: 1.0e-06
+  lr_scheduler: cosine
+  lr_start: 1.0e-06
+  num_cycles: 1
+  num_epochs: 20
+  num_steps_train: 384
+  num_warmup_epochs: 2
+  weight_decay: 0.0
+paths:
+  bands_mean: /home/louis/Code/data/metadata/bands_mean.json
+  bands_std: /home/louis/Code/data/metadata/bands_std.json
+  fwi: /media/data/boreal_data/full/CDS
+  hf_data: /home/louis/Code/wildfire-forecast/hug_data/Ontario
+  label: /media/data/boreal_data/labels_update
+  neg_env_spa: /media/data/boreal_data/NEG_TS_SPATIAL_UPDATE
+  neg_env_spa_hard: /media/data/boreal_data/NEG_TS_SPATIAL_UPDATE_HARD
+  neg_env_tab: /media/data/boreal_data/NEG_TS_UPDATE
+  neg_env_tab_hard: /media/data/boreal_data/NEG_TS_UPDATE_HARD
+  neg_sits: /media/data/boreal_data/full/COPERNICUS/UPDATE/S2_SERIES_SEAS_FORMAT_NEG
+  neg_sits_hard: /media/data/boreal_data/full/COPERNICUS/UPDATE/S2_SERIES_SEAS_FORMAT_NEG_HARD
+  pos_env_spa: /media/data/boreal_data/TS_SPATIAL_UPDATE
+  pos_env_tab: /media/data/boreal_data/TS_UPDATE
+  pos_sits: /media/data/boreal_data/full/COPERNICUS/UPDATE/S2_SERIES_SEAS_FORMAT
+  split: /media/data/boreal_data/full/COPERNICUS/UPDATE/split_one.json
+  split_hard: /media/data/boreal_data/full/COPERNICUS/UPDATE/split_one_hard.json
+wandb:
+  project: wildfire-forecast
+  user: louis-grosse-epfl

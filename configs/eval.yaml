@@ -15,25 +15,37 @@ size_plots: 6
 suffix: "one"
 
 MODEL:
-  architecture:  "ResNet"
-  resnet_type: "resnet50"
-  pretrained: True
+  architecture: "MSClipFacto"
+  msclip_model_name: "Llama3-MS-CLIP-Base"
+  msclip_ckpt: ""        # or path to local ckpt; leave empty to use HF download configured in build_model
   input_img_res: 264
-  img_res: 260
+  img_res: 224
   train_max_seq_len: 5
   val_max_seq_len: 5
-  test_max_seq_len: 5
-  input_dim: 14
-  depth: 5
-  encoder_channels: [512, 1024, 2048]
-  decoder_channels: [256, 128, 64]
+  input_dim: 10
+  patch_size: 16
   num_classes: 2
-  kernel_size: [3, 3]
-  n_stack_layers: 1
-  out_H: 26
-  out_W: 26
-  downsample_factor: 0.1
+  channels: 10
   threshold: 0.5
+  use_cls_fusion: false
+  ds_labels: true
+  use_l1c2l2a_adapter: false
+  l1c2l2a_Adapter_loc: "${paths.l1c2l2a_Adapter_loc}"
+  out_H: 25
+  out_W: 25
+  temp_enc_type: "attention" 
+  temp_depth: 2
+  use_conv_decoder: true
+  freeze_msclip: true
+  clearclip:
+    enabled: true          
+    apply_to_last_n: 1     
+    keep_ffn: false        # should be false for ClearCLIP
+    keep_residual: false   # should be false for ClearCLIP
+    use_self_self_attn: true    
+    ss_attn_iter: 1             
+    ss_attn_temp: null          
+    override_forward_for_dense: true
 
 SOLVER:
   num_epochs: 20
