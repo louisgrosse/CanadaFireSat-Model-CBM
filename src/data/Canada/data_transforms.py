@@ -40,6 +40,12 @@ from src.data.augmentations import (
 )
 from src.data.utils import extract_stats
 
+MSCLIP_MEANS = [925.161, 1183.128, 1338.041, 1667.254,
+                2233.633, 2460.96, 2555.569, 2619.542,
+                2406.497, 1841.645]
+MSCLIP_STDS  = [1205.586, 1223.713, 1399.638, 1403.298,
+                1378.513, 1434.924, 1491.141, 1454.089,
+                1473.248, 1365.08]
 
 # Test Extension with ColorJittering (RGB only), Coarse Dropout (Extend Masking), Mixup (Potentially in Dataset)
 def Canada_segmentation_transform(

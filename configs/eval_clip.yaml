@@ -2,21 +2,20 @@ defaults:
   - _self_
   - global_config
 
-model_path: "./results/models/ClearCLIPatln6_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter/MSClipFacto-08-f1-0.21.ckpt" 
+model_path: "./results/models/CLIP_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter/MSClipFacto-18-f1-0.21.ckpt" 
 config_name: "config_file.yaml"
 mode: "image"
 split: "val" # test
-output_dir: "./results/models/ClearCLIPatln6_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter/"
+output_dir: "./results/models/CLIP_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter/metrics"
 seed: 42
 with_region: True
-fwi_ths: [5, 10, 20, 30]
 n_plots: 50
 size_plots: 6
 
 CHECKPOINT:
-  experiment_name: ClearCLIPatln6_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter
+  experiment_name: CLIP_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter
   load_from_checkpoint: null
-  save_path: results/models/ClearCLIPatln6_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter
+  save_path: results/models/CLIP_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS_LONG_adapter
   save_steps: 10000
   train_metrics_steps: 200
   wandb_project: wildfire-forecast
@@ -52,7 +51,7 @@ MODEL:
   architecture: MSClipFacto
   channels: 10
   clearclip:
-    apply_to_last_n: 6
+    apply_to_last_n: 1
     enabled: false
     keep_ffn: false
     keep_residual: false
