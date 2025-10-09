@@ -26,7 +26,7 @@ MODEL:
   use_conv_decoder: true
   freeze_msclip: true
   clearclip:
-    enabled: true          
+    enabled: false          
     apply_to_last_n: 1     
     keep_ffn: false        # should be false for ClearCLIP
     keep_residual: false   # should be false for ClearCLIP
@@ -49,7 +49,7 @@ SOLVER:
 
 DATASETS:
   mode: "huggingface"
-  convert_l1c_to_l2a: true
+  use_msclip_norm: true
   kwargs:
     mean_file: "${paths.bands_mean}"
     std_file: "${paths.bands_std}"
@@ -80,7 +80,7 @@ DATASETS:
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "ClearCLIPatln1ssat_SITS_ONLY_FusedDOY_ONTARIO_ALBERTA_DS"
+  experiment_name: "CLIP_NORM_MSCLIP_FusedDOY_ONTARIO_ALBERTA_DS"
   save_path: "./results/models"
   train_metrics_steps: 200 
   save_steps: 10000

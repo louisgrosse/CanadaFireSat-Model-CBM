@@ -107,7 +107,6 @@ class SatImDataset(Dataset):
         return_paths: bool = False,
         bands: List[str] = BANDS_ALL,
         with_loc: bool = False,
-        convert_l1c_to_l2a: bool = False
     ):
         """Initialize the Dataset
 
@@ -125,7 +124,6 @@ class SatImDataset(Dataset):
             NotImplementedError: Mixing bands across bands group is not possible
             NotImplementedError: Mixing bands across bands group is not possible
         """ 
-        self.convert_l1c_to_l2a = convert_l1c_to_l2a
 
         data_dir = Path(data_dir)
         split_patterns = {"train": "train-*.parquet", "val": "validation-*.parquet", "test": "test-*.parquet"}

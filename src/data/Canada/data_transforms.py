@@ -37,6 +37,8 @@ from src.data.augmentations import (
     TileLocs,
     ToTensor,
     ToTHWC,
+    ToTensorMSCLIP,
+    NormalizeMSCLIP,
 )
 from src.data.utils import extract_stats
 
@@ -59,6 +61,7 @@ def Canada_segmentation_transform(
     with_doy: bool = True,
     with_loc: bool = True,
     img_only: bool = True,
+    use_msclip_norm: bool = True,
     **kwargs,
 ) -> transforms.Compose:
     """SITS augmentation pipeline
@@ -84,12 +87,20 @@ def Canada_segmentation_transform(
     std_array = extract_stats(std_file, bands)
 
     # Custom Bands Transforms
-    band_transform_list = [
-        ToTensor(with_loc=with_loc),
-        Rescale(output_size=(model_config["input_img_res"], model_config["input_img_res"])),
-        Concat(concat_keys=["10x", "20x", "60x"]),  # Order is important for RGB weights
-        Normalize(mean=mean_array, std=std_array),
-    ]
+    if use_msclip_norm:
+        band_transform_list = [
+            ToTensorMSCLIP(with_loc=with_loc),
+            Rescale(output_size=(model_config["input_img_res"], model_config["input_img_res"])),
+            Concat(concat_keys=["10x", "20x", "60x"]),
+            NormalizeMSCLIP(mean=MSCLIP_MEANS, std=MSCLIP_STDS),
+        ]
+    else:
+        band_transform_list = [
+            ToTensor(with_loc=with_loc),
+            Rescale(output_size=(model_config["input_img_res"], model_config["input_img_res"])),
+            Concat(concat_keys=["10x", "20x", "60x"]),  # Order is important for RGB weights
+            Normalize(mean=mean_array, std=std_array),
+        ]
 
     # Regularization Image Transforms
     if is_training:

@@ -9,6 +9,39 @@ import torch
 import torch.nn.functional as F
 
 
+class ToTensorMSCLIP(object):
+    """
+    Convert S2 arrays to Tensors in MS-CLIP style.
+    Keeps raw reflectance values (no min-max normalization),
+    converts to float32, and permutes to [C, H, W].
+    """
+
+    def __init__(self, with_loc: bool = False):
+        self.with_loc = with_loc
+
+    def _to_chw(self, arr: np.ndarray) -> torch.Tensor:
+        # Handle single or multi-band arrays
+        if arr.ndim == 2:
+            arr = arr[None, :, :]  # [1, H, W]
+        elif arr.ndim == 3:
+            arr = np.transpose(arr, (2, 0, 1))  # [C, H, W]
+        return torch.from_numpy(arr.astype(np.float32))
+
+    def __call__(self, sample: Dict[str, np.ndarray]) -> Dict[str, torch.Tensor]:
+        tensor_sample = {}
+        for key in ["10x", "20x", "60x"]:
+            if sample.get(key) is not None:
+                tensor_sample[key] = self._to_chw(sample[key])
+            else:
+                tensor_sample[key] = None
+
+        tensor_sample["labels"] = torch.tensor(sample["labels"], dtype=torch.float32).unsqueeze(0)
+        tensor_sample["doy"] = torch.tensor(sample["doy"], dtype=torch.float32)
+        if self.with_loc:
+            tensor_sample["loc"] = torch.tensor(sample["loc"], dtype=torch.float32)
+        return tensor_sample
+
+
 class ToTensor(object):
     """
     Convert ndarrays in sample to Tensors.
@@ -230,6 +263,18 @@ class Normalize(object):
         sample["doy"] = sample["doy"] / (366 + self.eps)  # We do have bisextile year in our data
         return sample
 
+class NormalizeMSCLIP(object):
+    def __init__(self, mean: float, std: float,eps: float = 1e-7):
+        # Convert list/array to tensors for arithmetic ops
+        self.mean = torch.tensor(mean, dtype=torch.float32).view(-1, 1, 1)
+        self.std = torch.tensor(std, dtype=torch.float32).view(-1, 1, 1)
+        self.eps = eps
+
+    def __call__(self, sample):
+        # Assume sample["inputs"] is a float tensor [C, H, W]
+        sample["inputs"] = (sample["inputs"] - self.mean) / self.std
+        sample["doy"] = sample["doy"] / (366 + self.eps)
+        return sample
 
 class Crop(object):
     """Crop randomly the image in a sample."""
