@@ -40,6 +40,7 @@ from src.data.augmentations import (
 )
 from src.data.utils import extract_stats
 
+#These are the weights used in MS-CLIPs dataloader
 MSCLIP_MEANS = [925.161, 1183.128, 1338.041, 1667.254,
                 2233.633, 2460.96, 2555.569, 2619.542,
                 2406.497, 1841.645]
