@@ -39,6 +39,8 @@ from src.data.augmentations import (
     ToTHWC,
     ToTensorMSCLIP,
     NormalizeMSCLIP,
+    ToTCHW_MSCLIP,
+    ReorderBands,
 )
 from src.data.utils import extract_stats
 
@@ -88,12 +90,18 @@ def Canada_segmentation_transform(
 
     # Custom Bands Transforms
     if use_msclip_norm:
+        S2_UINT8_TO_REFLECTANCE = 10000.0 / 255.0
+        MSCLIP_ORDER_10 = [2, 1, 0, 4, 5, 6, 3, 7, 8, 9]
+        
         band_transform_list = [
-            ToTensorMSCLIP(with_loc=with_loc),
+            ToTensorMSCLIP(with_loc=with_loc),                            
             Rescale(output_size=(model_config["input_img_res"], model_config["input_img_res"])),
-            Concat(concat_keys=["10x", "20x", "60x"]),
+            Concat(concat_keys=["10x", "20x", "60x"]),                     
+            transforms.Lambda(lambda s: {**s, "inputs": s["inputs"] * S2_UINT8_TO_REFLECTANCE}), 
+            ReorderBands([2, 1, 0, 4, 5, 6, 3, 7, 8, 9]),                
             NormalizeMSCLIP(mean=MSCLIP_MEANS, std=MSCLIP_STDS),
         ]
+
     else:
         band_transform_list = [
             ToTensor(with_loc=with_loc),
@@ -157,7 +165,10 @@ def Canada_segmentation_transform(
         
         img_transform_list.append(CutOrPad(max_seq_len=model_config["train_max_seq_len"], sampling_type="random"))
         img_transform_list.append(UnkMask(unk_class=-999, ground_truth_target="labels"))
-        img_transform_list.append(ToTHWC())
+        if use_msclip_norm:
+            img_transform_list.append(ToTCHW_MSCLIP())
+        else:
+            img_transform_list.append(ToTHWC())
 
     else:
         if ds_labels:
@@ -210,7 +221,10 @@ def Canada_segmentation_transform(
             )
 
         img_transform_list.append(UnkMask(unk_class=-999, ground_truth_target="labels"))
-        img_transform_list.append(ToTHWC())
+        if use_msclip_norm:
+            img_transform_list.append(ToTCHW_MSCLIP())
+        else:
+            img_transform_list.append(ToTHWC())
 
     total_transform_list = band_transform_list + img_transform_list
 

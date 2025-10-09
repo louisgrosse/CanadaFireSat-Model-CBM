@@ -174,6 +174,19 @@ class SatDataModule(LightningDataModule):
             model_config=model_config, is_training=False, is_eval=True, **kwargs
         )
 
+        # --- Sanity check: verify MS-CLIP normalization ---
+        #print("\n=== Sanity check: MS-CLIP normalization ===")
+        
+        #tmp_loader = self.train_dataloader()  # creates a temporary dataloader
+        #batch = next(iter(tmp_loader))
+        #x = batch["inputs"] if "inputs" in batch else batch[list(batch.keys())[0]]
+
+        #print(f"Shape: {x.shape}")
+        #print(f"Min: {x.min().item():.3f}, Max: {x.max().item():.3f}")
+        #print(f"Mean: {x.mean().item():.3f}, Std: {x.std().item():.3f}")
+        #print("Per-channel mean:", x.mean(dim=(0,2,3)))
+        #print("Per-channel std:", x.std(dim=(0,2,3)))
+        #print("===========================================\n")
 
     def __len__(self):
         return len(self.train_dataloader().dataset)

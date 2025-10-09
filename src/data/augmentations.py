@@ -505,6 +505,48 @@ class RandomTemporalDrop(object):
         return sample
 
 
+class ReorderBands(object):
+    def __init__(self, order):
+        self.order = order
+    def __call__(self, sample):
+        x = sample["inputs"]
+        if x.ndim == 3:
+            x = x[self.order, ...]
+        elif x.ndim == 4:
+            x = x[:, self.order, ...]
+        else:
+            raise ValueError(f"Unexpected shape {x.shape}")
+        sample["inputs"] = x
+        return sample
+
+
+class ToTCHW_MSCLIP(object):
+    """
+    Ensure inputs are [T, C, H, W] (channels-first per timestep).
+    If inputs are [T, H, W, C] or [B, T, H, W, C], permute them.
+    """
+    def __call__(self, sample):
+        x = sample["inputs"]
+
+        if x.ndim == 4:  # could be [T, C, H, W] or [T, H, W, C]
+            if x.shape[1] in (224, 256):  # heuristic: second dim looks like H
+                x = x.permute(0, 3, 1, 2).contiguous()  # [T,H,W,C] → [T,C,H,W]
+            # else already [T, C, H, W] → do nothing
+
+        elif x.ndim == 5:  # batched version [B, T, ...]
+            if x.shape[2] in (224, 256):  # second dim looks like H
+                x = x.permute(0, 1, 4, 2, 3).contiguous()  # [B,T,H,W,C] → [B,T,C,H,W]
+            # else already [B, T, C, H, W] → do nothing
+
+        else:
+            raise ValueError(f"Unexpected input shape {x.shape}")
+
+        sample["inputs"] = x
+        return sample
+
+
+
+
 class ToTHWC(object):
     """
     Convert Tensors to THWC.
