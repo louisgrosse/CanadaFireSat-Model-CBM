@@ -41,6 +41,9 @@ from src.data.augmentations import (
     NormalizeMSCLIP,
     ToTCHW_MSCLIP,
     ReorderBands,
+    band_order_probe,
+    DebugTapOnce,
+    DOSApproxL1CtoL2A,
 )
 from src.data.utils import extract_stats
 
@@ -98,8 +101,11 @@ def Canada_segmentation_transform(
             Rescale(output_size=(model_config["input_img_res"], model_config["input_img_res"])),
             Concat(concat_keys=["10x", "20x", "60x"]),                     
             transforms.Lambda(lambda s: {**s, "inputs": s["inputs"] * S2_UINT8_TO_REFLECTANCE}), 
-            ReorderBands([2, 1, 0, 4, 5, 6, 3, 7, 8, 9]),                
-            NormalizeMSCLIP(mean=MSCLIP_MEANS, std=MSCLIP_STDS),
+            ReorderBands([2, 1, 0, 4, 5, 6, 3, 7, 8, 9]),
+            #DebugTapOnce(band_order_probe),          
+            #DOSApproxL1CtoL2A(p=1.0),      
+            #NormalizeMSCLIP(mean=MSCLIP_MEANS, std=MSCLIP_STDS),
+            Normalize(mean=mean_array, std=std_array),
         ]
 
     else:

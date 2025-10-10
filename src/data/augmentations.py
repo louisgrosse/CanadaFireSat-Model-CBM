@@ -9,6 +9,76 @@ import torch
 import torch.nn.functional as F
 
 
+class DebugTapOnce:
+    _done = False
+    def __init__(self, func):
+        self.func = func
+    def __call__(self, sample):
+        if not DebugTapOnce._done:
+            try:
+                self.func(sample)
+            finally:
+                DebugTapOnce._done = True
+        return sample
+
+def band_order_probe(sample):
+    # sample["inputs"]: [T, C, H, W] in MS-CLIP order after reorder, reflectance scale
+    x = sample["inputs"]                      # [T,C,H,W]
+    t, c, h, w = x.shape
+    xr = x.reshape(-1, c, h, w)               # [T, C, H, W] → [N, C, H, W]
+
+    B2, B3, B4, B5, B6, B7, B8, B8A, B11, B12 = [xr[:, i] for i in range(10)]
+
+    ndvi = (B8 - B4) / (B8 + B4 + 1e-6)
+    def corr2(a,b):
+        am = a.mean(dim=(1,2), keepdim=True); bm = b.mean(dim=(1,2), keepdim=True)
+        an = a - am; bn = b - bm
+        num = (an*bn).mean(dim=(1,2))
+        den = (an.pow(2).mean(dim=(1,2)).sqrt() * bn.pow(2).mean(dim=(1,2)).sqrt() + 1e-6)
+        return (num/den).mean().item()
+
+    print("[DEBUG] Reflectance (pre-normalize)")
+    print("NDVI mean/std/min/max:",
+          ndvi.mean().item(), ndvi.std().item(), ndvi.min().item(), ndvi.max().item())
+    print("corr(B8,B8A):", corr2(B8,B8A))
+    print("corr(B11,B12):", corr2(B11,B12),
+          "  corr(B2,B11):", corr2(B2,B11), "  corr(B2,B12):", corr2(B2,B12))
+    ch_means = xr.mean(dim=(0,2,3))
+    print("Per-channel reflectance means (B2..B12):", [round(v.item(),2) for v in ch_means])
+
+
+class DOSApproxL1CtoL2A:
+    """
+    Dark Object Subtraction (DOS) per time-step on reflectance tensors (pre-normalization).
+    Expects sample['inputs'] in [T, C, H, W] with MS-CLIP order:
+    [B2,B3,B4,B5,B6,B7,B8,B8A,B11,B12]
+    """
+    def __init__(self, p=1.0, scales=None):
+
+        default_scales = torch.tensor([1.00, 0.85, 0.70, 0.10, 0.05, 0.05, 0.10, 0.08, 0.02, 0.02])
+        self.p = p
+        self.scales = None if scales is None else torch.tensor(scales, dtype=torch.float32)
+        self.default_scales = default_scales
+
+    def __call__(self, sample):
+        x = sample["inputs"]  # [T, C, H, W], reflectance units
+        device = x.device if isinstance(x, torch.Tensor) else None
+        if not isinstance(x, torch.Tensor):
+            x = torch.as_tensor(x, dtype=torch.float32)
+        T, C, H, W = x.shape
+        s = (self.scales.to(x.device) if self.scales is not None else self.default_scales.to(x.device)).view(1, C, 1, 1)
+
+        x_ = x.view(T, C, -1)
+        k = max(1, int((self.p/100.0) * x_.shape[-1]))
+        haze_vals, _ = torch.kthvalue(x_[:, 0, :], k=k, dim=-1)   # [T]
+        haze = haze_vals.view(T, 1, 1, 1) * s                      # [T, C, 1, 1] scaled per band
+
+        x = (x - haze).clamp_min_(0.0)
+
+        sample["inputs"] = x
+        return sample
+
+
 class ToTensorMSCLIP(object):
     """
     Convert S2 arrays to Tensors in MS-CLIP style.
@@ -265,13 +335,11 @@ class Normalize(object):
 
 class NormalizeMSCLIP(object):
     def __init__(self, mean: float, std: float,eps: float = 1e-7):
-        # Convert list/array to tensors for arithmetic ops
         self.mean = torch.tensor(mean, dtype=torch.float32).view(-1, 1, 1)
         self.std = torch.tensor(std, dtype=torch.float32).view(-1, 1, 1)
         self.eps = eps
 
     def __call__(self, sample):
-        # Assume sample["inputs"] is a float tensor [C, H, W]
         sample["inputs"] = (sample["inputs"] - self.mean) / self.std
         sample["doy"] = sample["doy"] / (366 + self.eps)
         return sample

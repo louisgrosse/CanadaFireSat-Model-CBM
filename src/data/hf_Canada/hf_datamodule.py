@@ -188,6 +188,11 @@ class SatDataModule(LightningDataModule):
         #print("Per-channel std:", x.std(dim=(0,2,3)))
         #print("===========================================\n")
 
+
+        # call once on a batch
+        #msclip_band_order_checks(x)
+
+
     def __len__(self):
         return len(self.train_dataloader().dataset)
 
@@ -435,3 +440,45 @@ class EnvDataModule(LightningDataModule):
             tab_source_cols=self.tab_val_cols,
             **self.kwargs,
         )
+
+
+def msclip_band_order_checks(x):  # x: [B,T,C,H,W] after MS-CLIP normalization
+    B,T,C,H,W = x.shape
+    # Undo normalization just for these checks (optional but more interpretable)
+    # If you kept the normalized tensor, skip “denorm” and operate on x directly.
+    # Using your MSCLIP_MEANS/STDS on device:
+    means = torch.tensor([925.161,1183.128,1338.041,1667.254,2233.633,2460.96,2555.569,2619.542,2406.497,1841.645], device=x.device).view(1,1,C,1,1)
+    stds  = torch.tensor([1205.586,1223.713,1399.638,1403.298,1378.513,1434.924,1491.141,1454.089,1473.248,1365.08], device=x.device).view(1,1,C,1,1)
+    x_reflect = x * stds + means  # back to reflectance-like scale
+
+    # Collapse B,T,H,W
+    xr = x_reflect.reshape(-1, C, H, W)
+
+    # 1) NDVI sanity: (B8 - B4) / (B8 + B4) should be mostly in [-1,1], skew > 0 for vegetated scenes
+    B4 = xr[:, 2]   # index 2 if order is B2,B3,B4,...
+    B8 = xr[:, 6]   # index 6
+    ndvi = (B8 - B4) / (B8 + B4 + 1e-6)
+    print("NDVI mean/std/min/max:", ndvi.mean().item(), ndvi.std().item(), ndvi.min().item(), ndvi.max().item())
+
+    # Heuristic: global NDVI mean around > 0.1 on average scenes is reasonable; if it’s strongly negative, bands may be swapped.
+
+    # 2) B8A should be highly correlated with B8 (same NIR neighborhood)
+    B8A = xr[:, 7]
+    def corr2(a,b):
+        am = a.mean(dim=(1,2), keepdim=True); bm = b.mean(dim=(1,2), keepdim=True)
+        an = (a-am); bn = (b-bm)
+        num = (an*bn).mean(dim=(1,2))
+        den = (an.pow(2).mean(dim=(1,2)).sqrt() * bn.pow(2).mean(dim=(1,2)).sqrt() + 1e-6)
+        return (num/den).mean().item()
+    print("corr(B8,B8A):", corr2(B8,B8A))
+
+    # 3) SWIR (B11,B12) should correlate strongly with each other and less with Blue (B2)
+    B2  = xr[:, 0]
+    B11 = xr[:, 8]; B12 = xr[:, 9]
+    print("corr(B11,B12):", corr2(B11,B12))
+    print("corr(B2,B11):", corr2(B2,B11), "corr(B2,B12):", corr2(B2,B12))
+
+    # 4) Mean brightness ordering heuristic (weak but quick):
+    # Typically (dataset dependent): mean(B8) > mean(B4) > mean(B3) > mean(B2)
+    ch_means = xr.mean(dim=(0,2,3))
+    print("Per-channel reflectance means (B2..B12):", ch_means.tolist())

@@ -151,65 +151,81 @@ class MSClipFactorizeModel(nn.Module):
         self.head = nn.Conv2d(self.embed_dim, num_classes, 1)
 
     def forward(self, batch, doy=None):
-        # batch: [B, T, H, W, C]
-        B, T, H, W, C = batch.shape
-        x = batch.permute(0, 1, 4, 2, 3).reshape(B*T, C, H, W)
+        # EXPECTED LAYOUT: [B, T, C, H, W] already normalized (MS-CLIP stats)
+        assert batch.ndim == 5, f"inputs must be [B,T,C,H,W], got {batch.ndim} dims"
+        B, T, C, H, W = batch.shape
 
-        if x.shape[1] > self.channels:
-            x = x[:, :self.channels, :, :]
+        # Basic checks
+        assert C == self.channels, f"channels mismatch: got {C}, expected {self.channels}"
+        assert H == self.image_size and W == self.image_size, f"spatial mismatch: ({H},{W}) vs {self.image_size}"
+        assert torch.isfinite(batch).all(), "inputs contain NaN/Inf"
+        assert batch.dtype in (torch.float16, torch.float32, torch.bfloat16), f"bad dtype {batch.dtype}"
+
+        # Flatten time for the encoder
+        x = batch.reshape(B * T, C, H, W)
+
+        # Extra guard: image encoder expects patch_size <= H,W
+        assert self.patch_size <= H and self.patch_size <= W, f"patch {self.patch_size} > ({H},{W})"
 
         with torch.no_grad():
             feats = self.image_encoder.get_patch_embeddings(x)  # [B*T, P(+1), D]
+            assert torch.isfinite(feats).all(), "encoder outputs contain NaN/Inf"
 
+        # split CLS vs patches
         if self.has_cls_token:
-            cls_feats = feats[:, 0, :]    # [B*T, D]
-            patch_feats = feats[:, 1:, :] # [B*T, P, D]
+            cls_feats = feats[:, 0, :]            # [B*T, D]
+            patch_feats = feats[:, 1:, :]         # [B*T, P, D]
         else:
             cls_feats, patch_feats = None, feats
 
         # [B, T, P, D]
         patch_feats = patch_feats.view(B, T, self.num_patches, self.embed_dim)
 
+        # Optional adapter
         if self.use_l1c2l2a_adapter:
-            # flatten temporal or per-patch as needed
-            if patch_feats.ndim == 4:
-                B, T, P, D = patch_feats.shape
-                patch_feats = patch_feats.view(B*T, P, D)
-            patch_feats = self.l1c2l2a(patch_feats)
-            patch_feats = patch_feats.view(B, T, P, D)
+            patch_feats = self.l1c2l2a(patch_feats.view(B*T, self.num_patches, self.embed_dim)).view(
+                B, T, self.num_patches, self.embed_dim
+            )
 
+        # Temporal attention (B*P, T, D)
+        patch_feats = patch_feats.permute(0, 2, 1, 3).contiguous().view(B * self.num_patches, T, self.embed_dim)
 
-        patch_feats = patch_feats.permute(0, 2, 1, 3).contiguous()  # [B,P,T,D]
-        patch_feats = patch_feats.view(B * self.num_patches, T, self.embed_dim)
-
+        # DOY checks
         if self.use_doy and doy is not None:
-            if doy.ndim > 2:                           # [B,T,H,W,1]
-                doy = doy.view(B, T, -1)[:, :, 0]      # [B,T]
-            doy_emb = self.doy_embed(doy)              # [B, T, D]
-            doy_emb = doy_emb.unsqueeze(1).expand(-1, self.num_patches, -1, -1)  # [B,P,T,D]
-            doy_emb = doy_emb.reshape(B * self.num_patches, T, self.embed_dim)   # [B*P,T,D]
+            if doy.ndim > 2:  # [B,T,H,W,1] -> [B,T]
+                doy = doy.view(B, T, -1)[:, :, 0]
+            assert doy.shape == (B, T), f"DOY must be [B,T], got {tuple(doy.shape)}"
+            assert torch.isfinite(doy).all(), "DOY has NaN/Inf"
+            # clamp to valid range just in case (won't hurt)
+            doy = doy.clamp(1, 366)
+            doy_emb = self.doy_embed(doy)  # [B,T,D]
+            doy_emb = doy_emb.unsqueeze(1).expand(-1, self.num_patches, -1, -1).reshape(
+                B * self.num_patches, T, self.embed_dim
+            )
         else:
             doy_emb = None
 
-
+        # Temporal encoding
         patch_feats = self.temp_enc(patch_feats, doy_emb=doy_emb)  # [B*P, D]
+        assert torch.isfinite(patch_feats).all(), "Temporal encoder produced NaN/Inf"
+
+        # [B, P, D] -> grid
         patch_feats = patch_feats.view(B, self.num_patches, self.embed_dim)
-
-        # Optional CLS fusion
         if self.use_cls_fusion and self.has_cls_token:
-            cls_feats = cls_feats.view(B, T, self.embed_dim)         # [B, T, D]
-            cls_feats = self.cls_temp_enc(cls_feats)                 # [B, D]
-            cls_feats = self.cls_fuse_proj(cls_feats).unsqueeze(1)   # [B, 1, D]
-            patch_feats = patch_feats + cls_feats                         
+            cls_feats = cls_feats.view(B, T, self.embed_dim)
+            cls_feats = self.cls_temp_enc(cls_feats)
+            patch_feats = patch_feats + self.cls_fuse_proj(cls_feats).unsqueeze(1)
 
-        # back to 2D grid
-        patch_feats = patch_feats.view(B, self.H_patch, self.W_patch, self.embed_dim)
-        patch_feats = patch_feats.permute(0, 3, 1, 2).contiguous()   # [B,D,H_p,W_p]
+        # [B,D,H_p,W_p]
+        patch_feats = patch_feats.view(B, self.H_patch, self.W_patch, self.embed_dim).permute(0, 3, 1, 2).contiguous()
 
-        out = self.head(patch_feats)                                # [B, num_classes, H_p, W_p]
+        out = self.head(patch_feats)  # [B, num_classes, H_p, W_p]
+        assert torch.isfinite(out).all(), "Head produced NaN/Inf"
+
+        # Up-sample to match labels size outside (caller will compare); default to H,W of input
         if not self.ds_labels:
-            out = F.interpolate(out, size=(H, W), mode="bilinear", align_corners=False) #No downsampling of labels
+            out = F.interpolate(out, size=(H, W), mode="bilinear", align_corners=False)
         else:
-            out = F.interpolate(out, size=(self.out_H, self.out_W), mode="bilinear", align_corners=False) #Downsampling of labels
+            out = F.interpolate(out, size=(self.out_H, self.out_W), mode="bilinear", align_corners=False)
 
         return out
