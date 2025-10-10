@@ -18,6 +18,7 @@ MODEL:
   use_cls_fusion: false
   ds_labels: true
   use_l1c2l2a_adapter: false
+  unfreeze_last_block: true
   l1c2l2a_Adapter_loc: "${paths.l1c2l2a_Adapter_loc}"
   out_H: 25
   out_W: 25

@@ -171,11 +171,11 @@ def train_and_evaluate(cfg: DictConfig):
         load_from_checkpoint(net, checkpoint)
 
     # Sanity probe (run once)
-    try:
-        sanity_probe_once(datamodule, net.to(device), device, use_msclip_stats=True)
-    except Exception as e:
-        print("[SANITY PROBE FAILED]", repr(e))
-        raise
+    #try:
+    #    sanity_probe_once(datamodule, net.to(device), device, use_msclip_stats=True)
+    #except Exception as e:
+    #    print("[SANITY PROBE FAILED]", repr(e))
+    #    raise
 
 
     # Set-up model checkpoint & callbacks

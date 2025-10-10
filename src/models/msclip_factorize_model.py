@@ -74,9 +74,10 @@ class MSClipFactorizeModel(nn.Module):
         use_l1c2l2a_adapter: bool = False,
         l1c2l2a_dropout: int = 0,
         l1c2l2a_Adapter_loc:str = "",
+        unfreeze_last_block:bool = True,
         model_config: Dict[str, Any] = None,
         **kwargs,
-    ):
+        ):
         super().__init__()
         
         self.ds_labels = ds_labels
@@ -96,7 +97,7 @@ class MSClipFactorizeModel(nn.Module):
         )
         self.msclip_model   = msclip_model            
         self.image_encoder  = msclip_model.image_encoder  
-
+        
         if model_config is not None and "clearclip" in model_config:
             num_patched = maybe_patch_clearclip(self.image_encoder, model_config["clearclip"])
             if num_patched > 0:
@@ -108,8 +109,13 @@ class MSClipFactorizeModel(nn.Module):
             for p in self.msclip_model.parameters():
                 p.requires_grad = False
 
-        # determine patch dims
-        with torch.no_grad():
+        if unfreeze_last_block:
+            # You can expose this as an arg, e.g. unfreeze_last_n
+            self._unfreeze_last_vit_blocks(n_blocks=1)
+
+        requires_enc_grad = any(p.requires_grad for p in self.image_encoder.parameters())
+        ctx = torch.enable_grad() if requires_enc_grad and self.training else torch.no_grad()
+        with ctx:
             dummy = torch.zeros(1, channels, 224, 224)
             patch_feats = self.image_encoder.get_patch_embeddings(dummy)  # [1, P, D]
             _, num_patches, embed_dim = patch_feats.shape
@@ -149,6 +155,38 @@ class MSClipFactorizeModel(nn.Module):
 
         # Segmentation head
         self.head = nn.Conv2d(self.embed_dim, num_classes, 1)
+    
+    def _iter_vit_blocks(self, enc):
+        """
+        Return the list of Vision Transformer blocks inside MS-CLIP's image encoder.
+        Specifically targets the path:
+        enc.model.visual.transformer.resblocks
+        """
+        try:
+            return list(enc.model.visual.transformer.resblocks)
+        except AttributeError:
+            raise RuntimeError(
+                "Could not locate VisionTransformer.resblocks under image_encoder.model.visual.transformer."
+            )
+
+    def _unfreeze_last_vit_blocks(self, n_blocks: int = 1):
+        blocks = self._iter_vit_blocks(self.image_encoder)
+        n = max(1, min(n_blocks, len(blocks)))
+        last_blocks = blocks[-n:]
+
+        # first freeze everything
+        for p in self.msclip_model.parameters():
+            p.requires_grad = False
+
+        # then unfreeze the selected blocks + final LayerNorm if you wish
+        for b in last_blocks:
+            for p in b.parameters():
+                p.requires_grad = True
+
+        # optional: unfreeze the last normalization layer
+        if hasattr(self.image_encoder.model.visual, "ln_post"):
+            for p in self.image_encoder.model.visual.ln_post.parameters():
+                p.requires_grad = True
 
     def forward(self, batch, doy=None):
         # EXPECTED LAYOUT: [B, T, C, H, W] already normalized (MS-CLIP stats)
@@ -229,3 +267,4 @@ class MSClipFactorizeModel(nn.Module):
             out = F.interpolate(out, size=(self.out_H, self.out_W), mode="bilinear", align_corners=False)
 
         return out
+
