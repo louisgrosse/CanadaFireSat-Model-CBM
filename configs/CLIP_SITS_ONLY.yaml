@@ -18,7 +18,7 @@ MODEL:
   use_cls_fusion: false
   ds_labels: true
   use_l1c2l2a_adapter: false
-  unfreeze_last_block: true
+  unfreeze_last_block: false
   l1c2l2a_Adapter_loc: "${paths.l1c2l2a_Adapter_loc}"
   out_H: 25
   out_W: 25
@@ -37,25 +37,25 @@ MODEL:
     override_forward_for_dense: true
 
 SOLVER:
-  num_epochs: 20
+  num_epochs: 40
   num_warmup_epochs: 2
-  loss_function: masked_dice_loss
+  loss_function: masked_dice_loss #combined_dice_ce or masked_dice_loss
   lr_scheduler: 'cosine'
   lr_start: 1e-6
-  lr_min: 1e-6
+  lr_min: 1e-5
   num_cycles: 1
-  lr_base: 5e-5
-  weight_decay: 0.0
-  accumulate_grad_batches: 3
+  lr_base: 3e-4
+  weight_decay: 0.1
+  accumulate_grad_batches: 2
 
 DATASETS:
   mode: "huggingface"
-  use_msclip_norm: true
   kwargs:
     mean_file: "${paths.bands_mean}"
     std_file: "${paths.bands_std}"
     with_loc: False
     with_doy: True
+    use_msclip_norm: true
     bands: [
               "B2",
               "B3",
@@ -81,7 +81,7 @@ DATASETS:
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "CLIP_NORM_MSCLIP_FusedDOY_ONTARIO_ALBERTA_DS"
+  experiment_name: "MS-CLIP"
   save_path: "./results/models"
   train_metrics_steps: 200 
   save_steps: 10000

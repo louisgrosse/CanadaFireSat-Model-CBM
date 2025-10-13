@@ -12,9 +12,6 @@ from msclip.inference.utils import build_model
 from msclip.inference.clearclip import maybe_patch_clearclip
 
 
-# -----------------------
-# DOY Encoder
-# -----------------------
 class DOYEmbed(nn.Module):
     def __init__(self, embed_dim):
         super().__init__()
@@ -29,9 +26,6 @@ class DOYEmbed(nn.Module):
         return self.fc(cyc)                     # [B, T, D]
 
 
-# -----------------------
-# Temporal Attention with DOY conditioning
-# -----------------------
 class TemporalAttention(nn.Module):
     def __init__(self, embed_dim, num_heads=4, dropout=0.1):
         super().__init__()
@@ -52,9 +46,7 @@ class TemporalAttention(nn.Module):
         return x.mean(dim=1) 
 
 
-# -----------------------
-# Main Model
-# -----------------------
+
 class MSClipFactorizeModel(nn.Module):
     def __init__(
         self,
@@ -89,9 +81,6 @@ class MSClipFactorizeModel(nn.Module):
         self.patch_size = patch_size
         self.use_cls_fusion = use_cls_fusion
 
-        # -----------------------
-        # Load MS-CLIP
-        # -----------------------
         msclip_model, preprocess, tokenizer = build_model(
             model_name=model_name, pretrained=True, ckpt_path=ckpt_path, device="cpu", channels=channels
         )
@@ -110,7 +99,6 @@ class MSClipFactorizeModel(nn.Module):
                 p.requires_grad = False
 
         if unfreeze_last_block:
-            # You can expose this as an arg, e.g. unfreeze_last_n
             self._unfreeze_last_vit_blocks(n_blocks=1)
 
         requires_enc_grad = any(p.requires_grad for p in self.image_encoder.parameters())
@@ -138,22 +126,19 @@ class MSClipFactorizeModel(nn.Module):
             adapter_weights = torch.load("/home/louis/Code/wildfire-forecast/worldstrat/l1c2l2a_linear.pt", map_location="cpu")
             self.l1c2l2a.load_state_dict(adapter_weights)
         
-        # DOY encoder
+
         if self.use_doy:
             self.doy_embed = DOYEmbed(self.embed_dim)
 
-        # Temporal attention
         if temp_enc_type == "attention":
             self.temp_enc = TemporalAttention(embed_dim=self.embed_dim, num_heads=8, dropout=0.1)
         else:
             raise ValueError(f"Unknown temp_enc_type: {temp_enc_type}")
 
-        # Optional CLS fusion
         if self.use_cls_fusion and self.has_cls_token:
             self.cls_temp_enc = TemporalAttention(embed_dim=self.embed_dim, num_heads=4, dropout=0.1)
             self.cls_fuse_proj = nn.Linear(self.embed_dim, self.embed_dim)
 
-        # Segmentation head
         self.head = nn.Conv2d(self.embed_dim, num_classes, 1)
     
     def _iter_vit_blocks(self, enc):
@@ -189,27 +174,23 @@ class MSClipFactorizeModel(nn.Module):
                 p.requires_grad = True
 
     def forward(self, batch, doy=None):
-        # EXPECTED LAYOUT: [B, T, C, H, W] already normalized (MS-CLIP stats)
+        #[B, T, C, H, W] 
         assert batch.ndim == 5, f"inputs must be [B,T,C,H,W], got {batch.ndim} dims"
         B, T, C, H, W = batch.shape
 
-        # Basic checks
         assert C == self.channels, f"channels mismatch: got {C}, expected {self.channels}"
         assert H == self.image_size and W == self.image_size, f"spatial mismatch: ({H},{W}) vs {self.image_size}"
         assert torch.isfinite(batch).all(), "inputs contain NaN/Inf"
         assert batch.dtype in (torch.float16, torch.float32, torch.bfloat16), f"bad dtype {batch.dtype}"
 
-        # Flatten time for the encoder
         x = batch.reshape(B * T, C, H, W)
 
-        # Extra guard: image encoder expects patch_size <= H,W
         assert self.patch_size <= H and self.patch_size <= W, f"patch {self.patch_size} > ({H},{W})"
 
         with torch.no_grad():
             feats = self.image_encoder.get_patch_embeddings(x)  # [B*T, P(+1), D]
             assert torch.isfinite(feats).all(), "encoder outputs contain NaN/Inf"
 
-        # split CLS vs patches
         if self.has_cls_token:
             cls_feats = feats[:, 0, :]            # [B*T, D]
             patch_feats = feats[:, 1:, :]         # [B*T, P, D]
@@ -219,22 +200,20 @@ class MSClipFactorizeModel(nn.Module):
         # [B, T, P, D]
         patch_feats = patch_feats.view(B, T, self.num_patches, self.embed_dim)
 
-        # Optional adapter
         if self.use_l1c2l2a_adapter:
             patch_feats = self.l1c2l2a(patch_feats.view(B*T, self.num_patches, self.embed_dim)).view(
                 B, T, self.num_patches, self.embed_dim
             )
 
-        # Temporal attention (B*P, T, D)
+        # (B*P, T, D)
         patch_feats = patch_feats.permute(0, 2, 1, 3).contiguous().view(B * self.num_patches, T, self.embed_dim)
 
-        # DOY checks
         if self.use_doy and doy is not None:
             if doy.ndim > 2:  # [B,T,H,W,1] -> [B,T]
                 doy = doy.view(B, T, -1)[:, :, 0]
             assert doy.shape == (B, T), f"DOY must be [B,T], got {tuple(doy.shape)}"
             assert torch.isfinite(doy).all(), "DOY has NaN/Inf"
-            # clamp to valid range just in case (won't hurt)
+
             doy = doy.clamp(1, 366)
             doy_emb = self.doy_embed(doy)  # [B,T,D]
             doy_emb = doy_emb.unsqueeze(1).expand(-1, self.num_patches, -1, -1).reshape(
@@ -243,11 +222,10 @@ class MSClipFactorizeModel(nn.Module):
         else:
             doy_emb = None
 
-        # Temporal encoding
         patch_feats = self.temp_enc(patch_feats, doy_emb=doy_emb)  # [B*P, D]
         assert torch.isfinite(patch_feats).all(), "Temporal encoder produced NaN/Inf"
 
-        # [B, P, D] -> grid
+        # [B, P, D]
         patch_feats = patch_feats.view(B, self.num_patches, self.embed_dim)
         if self.use_cls_fusion and self.has_cls_token:
             cls_feats = cls_feats.view(B, T, self.embed_dim)
@@ -260,7 +238,6 @@ class MSClipFactorizeModel(nn.Module):
         out = self.head(patch_feats)  # [B, num_classes, H_p, W_p]
         assert torch.isfinite(out).all(), "Head produced NaN/Inf"
 
-        # Up-sample to match labels size outside (caller will compare); default to H,W of input
         if not self.ds_labels:
             out = F.interpolate(out, size=(H, W), mode="bilinear", align_corners=False)
         else:

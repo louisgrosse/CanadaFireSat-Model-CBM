@@ -38,6 +38,7 @@ LABEL_IMG_RES = 264
 LABEL_IMG_RES_LOW = 260
 LABEL_RES = 26
 ORDER_INDEX = [10, 2, 1, 0, 4, 5, 6, 3, 7, 11, 12, 8, 9]
+MSCLIP_ORDER_10 = [2, 1, 0, 4, 5, 6, 3, 7, 8, 9]
 
 # Environment Canada Constants
 TAB_SOURCE_COLS = {

@@ -46,6 +46,43 @@ def band_order_probe(sample):
     ch_means = xr.mean(dim=(0,2,3))
     print("Per-channel reflectance means (B2..B12):", [round(v.item(),2) for v in ch_means])
 
+# Drop this class into augmentations.py
+import torch
+
+class StatsTap(object):
+    def __init__(self, tag: str):
+        self.tag = tag
+
+    def __call__(self, sample):
+        x = sample["inputs"]  # tensor with shape [T,C,H,W] or [T,H,W,C] or [C,H,W]
+
+        # Standardize to [T, C, H, W] for stats
+        if x.ndim == 3:               # [C,H,W]
+            t = x.unsqueeze(0)        # [1,C,H,W]
+        elif x.ndim == 4:
+            # If channel-last (THWC), permute to TCHW
+            if x.shape[-1] <= 20 and x.shape[1] in (224, 256):   # [T,H,W,C]
+                t = x.permute(0, 3, 1, 2).contiguous()
+            else:
+                t = x  # already [T,C,H,W]
+        else:
+            raise ValueError(f"[DebugStats] Unexpected shape: {x.shape}")
+
+        # Reduce over time and spatial dims
+        cmins = torch.amin(t, dim=(0, 2, 3))
+        cmaxs = torch.amax(t, dim=(0, 2, 3))
+        cmean = t.mean(dim=(0, 2, 3))
+        cstd  = t.std(dim=(0, 2, 3), unbiased=False)
+
+        # Print first 10 channels to keep logs readable
+        def tolist(v): 
+            return [round(float(z), 3) for z in v[:10]]
+        print(f"[{self.tag}] shape={tuple(x.shape)}",
+              f"min[:10]={tolist(cmins)} max[:10]={tolist(cmaxs)}",
+              f"mean[:10]={tolist(cmean)} std[:10]={tolist(cstd)}")
+        return sample
+
+
 
 class DOSApproxL1CtoL2A:
     """
@@ -596,15 +633,14 @@ class ToTCHW_MSCLIP(object):
     def __call__(self, sample):
         x = sample["inputs"]
 
-        if x.ndim == 4:  # could be [T, C, H, W] or [T, H, W, C]
-            if x.shape[1] in (224, 256):  # heuristic: second dim looks like H
+        if x.ndim == 4: 
+            if x.shape[1] in (224, 256): 
                 x = x.permute(0, 3, 1, 2).contiguous()  # [T,H,W,C] → [T,C,H,W]
-            # else already [T, C, H, W] → do nothing
 
-        elif x.ndim == 5:  # batched version [B, T, ...]
-            if x.shape[2] in (224, 256):  # second dim looks like H
+        elif x.ndim == 5:  
+            if x.shape[2] in (224, 256): 
                 x = x.permute(0, 1, 4, 2, 3).contiguous()  # [B,T,H,W,C] → [B,T,C,H,W]
-            # else already [B, T, C, H, W] → do nothing
+
 
         else:
             raise ValueError(f"Unexpected input shape {x.shape}")

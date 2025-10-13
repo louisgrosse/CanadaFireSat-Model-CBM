@@ -44,8 +44,10 @@ from src.data.augmentations import (
     band_order_probe,
     DebugTapOnce,
     DOSApproxL1CtoL2A,
+    StatsTap,
 )
 from src.data.utils import extract_stats
+from src.constants import MSCLIP_ORDER_10
 
 #These are the weights used in MS-CLIPs dataloader
 MSCLIP_MEANS = [925.161, 1183.128, 1338.041, 1667.254,
@@ -94,18 +96,20 @@ def Canada_segmentation_transform(
     # Custom Bands Transforms
     if use_msclip_norm:
         S2_UINT8_TO_REFLECTANCE = 10000.0 / 255.0
-        MSCLIP_ORDER_10 = [2, 1, 0, 4, 5, 6, 3, 7, 8, 9]
         
         band_transform_list = [
             ToTensorMSCLIP(with_loc=with_loc),                            
             Rescale(output_size=(model_config["input_img_res"], model_config["input_img_res"])),
-            Concat(concat_keys=["10x", "20x", "60x"]),                     
+            Concat(concat_keys=["10x", "20x", "60x"]),      
+            #StatsTap("pre-norm"),               
             transforms.Lambda(lambda s: {**s, "inputs": s["inputs"] * S2_UINT8_TO_REFLECTANCE}), 
-            ReorderBands([2, 1, 0, 4, 5, 6, 3, 7, 8, 9]),
-            #DebugTapOnce(band_order_probe),          
+            #StatsTap("post-rescale"),
+            ReorderBands(MSCLIP_ORDER_10),
+            DebugTapOnce(band_order_probe),          
             #DOSApproxL1CtoL2A(p=1.0),      
-            #NormalizeMSCLIP(mean=MSCLIP_MEANS, std=MSCLIP_STDS),
-            Normalize(mean=mean_array, std=std_array),
+            NormalizeMSCLIP(mean=MSCLIP_MEANS, std=MSCLIP_STDS),
+            #StatsTap("post-norm-msclip"),
+            #Normalize(mean=mean_array, std=std_array),
         ]
 
     else:
@@ -113,6 +117,7 @@ def Canada_segmentation_transform(
             ToTensor(with_loc=with_loc),
             Rescale(output_size=(model_config["input_img_res"], model_config["input_img_res"])),
             Concat(concat_keys=["10x", "20x", "60x"]),  # Order is important for RGB weights
+            ReorderBands(MSCLIP_ORDER_10),
             Normalize(mean=mean_array, std=std_array),
         ]
 
