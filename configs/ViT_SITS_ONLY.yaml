@@ -17,6 +17,7 @@ MODEL:
   out_W: 25
   doy_int_type: "channel"
   temp_enc_type: "convlstm"
+  ds_labels: true
   kernel_size: [3, 3]
   n_stack_layers: 1
   threshold: 0.5
@@ -73,12 +74,12 @@ DATASETS:
     # bands: possibility to specify the selected bands.
   train:
     data_dir: "${paths.hf_data}"
-    batch_size: 24
+    batch_size: 12
     num_workers: 8
 
   eval:
     data_dir: "${paths.hf_data}"
-    batch_size: 24
+    batch_size: 12
     num_workers: 8
 
 CHECKPOINT:

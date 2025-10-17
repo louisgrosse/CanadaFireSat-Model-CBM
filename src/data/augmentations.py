@@ -8,6 +8,28 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+# --- Add somewhere near your other transforms ---
+class StashLabelBeforeDownsample:
+    """
+    Copy the current label tensor (before any spatial downsampling) into sample['labels_raw'].
+    Place this transform immediately BEFORE any transform that changes label resolution.
+    """
+    def __init__(self, key_in: str = "labels", key_out: str = "labels_raw"):
+        self.key_in = key_in
+        self.key_out = key_out
+
+    def __call__(self, sample):
+        # sample could be dict or namespace; handle dict safely
+        if isinstance(sample, dict) and self.key_in in sample and self.key_out not in sample:
+            # save a detached clone so later transforms can't mutate it
+            x = sample[self.key_in]
+            try:
+                sample[self.key_out] = x.clone()
+            except AttributeError:
+                # if not tensor, best-effort shallow copy
+                sample[self.key_out] = x
+        return sample
+
 
 class DebugTapOnce:
     _done = False
@@ -45,9 +67,6 @@ def band_order_probe(sample):
           "  corr(B2,B11):", corr2(B2,B11), "  corr(B2,B12):", corr2(B2,B12))
     ch_means = xr.mean(dim=(0,2,3))
     print("Per-channel reflectance means (B2..B12):", [round(v.item(),2) for v in ch_means])
-
-# Drop this class into augmentations.py
-import torch
 
 class StatsTap(object):
     def __init__(self, tag: str):
@@ -649,8 +668,6 @@ class ToTCHW_MSCLIP(object):
         return sample
 
 
-
-
 class ToTHWC(object):
     """
     Convert Tensors to THWC.
@@ -659,7 +676,16 @@ class ToTHWC(object):
     """
 
     def __call__(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        sample["inputs"] = sample["inputs"].permute(0, 2, 3, 1)
+        x = sample["inputs"]
+        if x.ndim == 4: 
+            if x.shape[1] in (224, 256): 
+                x = x.permute(0, 3, 1, 2).contiguous()  # [T,H,W,C] → [T,C,H,W]
+
+        elif x.ndim == 5:  
+            if x.shape[2] in (224, 256): 
+                x = x.permute(0, 1, 4, 2, 3).contiguous()  # [B,T,H,W,C] → [B,T,C,H,W]
+        sample["inputs"] = x
+        
         sample["labels"] = sample["labels"].permute(1, 2, 0)
         sample["unk_masks"] = sample["unk_masks"].permute(1, 2, 0)
         return sample

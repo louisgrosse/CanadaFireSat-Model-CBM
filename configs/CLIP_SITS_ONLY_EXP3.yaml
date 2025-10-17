@@ -19,11 +19,12 @@ MODEL:
   use_cls_fusion: false
   use_l1c2l2a_adapter: false
   unfreeze_last_block: false
-  pretrained: false
+  pretrained: true
   l1c2l2a_Adapter_loc: "${paths.l1c2l2a_Adapter_loc}"
   out_H: 25
   out_W: 25
   temp_enc_type: "attention" 
+  learned_query: false
   freeze_msclip: false
   clearclip:
     enabled: false          
@@ -80,7 +81,7 @@ DATASETS:
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "MS-CLIP_randomInit"
+  experiment_name: "MS-CLIP_Fixed_FineTune"
   save_path: "./results/models"
   train_metrics_steps: 200 
   save_steps: 10000

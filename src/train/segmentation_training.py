@@ -19,15 +19,6 @@ from src.utils.torch_utils import load_from_checkpoint
 
 sys.path.insert(0, os.getcwd())
 
-
-# ---- Sanity probe (run once before training) -------------------------------
-import torch
-import torch.nn.functional as F
-
-# If you have these available, fill them; otherwise the probe will skip de-norm NDVI:
-MSCLIP_MEANS = torch.tensor([925.161,1183.128,1338.041,1667.254,2233.633,2460.96,2555.569,2619.542,2406.497,1841.645], dtype=torch.float32)
-MSCLIP_STDS  = torch.tensor([1205.586,1223.713,1399.638,1403.298,1378.513,1434.924,1491.141,1454.089,1473.248,1365.08], dtype=torch.float32)
-
 def _corr2(a,b):
     # a,b: [N,H,W]
     am = a.mean(dim=(1,2), keepdim=True); bm = b.mean(dim=(1,2), keepdim=True)
@@ -159,11 +150,19 @@ def train_and_evaluate(cfg: DictConfig):
     checkpoint = cfg["CHECKPOINT"]["load_from_checkpoint"]
     local_device_ids = cfg["SET-UP"]["local_device_ids"]  # List of integers ids for GPUs
     arch_name = cfg["MODEL"]["architecture"]
-    device = get_device(local_device_ids, allow_cpu=False)
+    #device = get_device(local_device_ids, allow_cpu=False)
+
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))   # torchrun sets this
+    torch.cuda.set_device(local_rank)
+    device = torch.device(f"cuda:{local_rank}")
     seed_everything(cfg["SET-UP"]["seed"])
 
     datamodule = get_data(cfg)
     cfg["SOLVER"]["num_steps_train"] = len(datamodule.train_dataloader())
+
+    print("RANK", os.getenv("RANK"), "LOCAL_RANK", os.getenv("LOCAL_RANK"),
+      "WORLD_SIZE", os.getenv("WORLD_SIZE"),
+      "current_device", torch.cuda.current_device())
 
     # Initialize model & Load weights
     net = get_model(cfg, device)
@@ -224,12 +223,13 @@ def train_and_evaluate(cfg: DictConfig):
     # Set-up Trainer
     trainer = Trainer(
         max_epochs=num_epochs,
-        devices=local_device_ids,
+        accelerator="gpu",
+        devices=4,                 
+        num_nodes=1,
+        strategy="ddp",            # <-- enable multi-GPU
         logger=wandb_logger,
         callbacks=callbacks,
         enable_progress_bar=True,
-        accelerator="gpu",
-        # strategy="ddp",
         accumulate_grad_batches=cfg["SOLVER"]["accumulate_grad_batches"],
         reload_dataloaders_every_n_epochs=reload_dataloaders_every_n_epochs,
     )
@@ -325,4 +325,6 @@ def train_and_evaluate_CLIP(cfg: DictConfig):
 
 
 if __name__ == "__main__":
+    import torch.multiprocessing as mp
+    mp.set_start_method("spawn", force=True)
     train_and_evaluate()

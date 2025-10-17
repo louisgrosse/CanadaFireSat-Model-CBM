@@ -19,12 +19,13 @@ MODEL:
   use_cls_fusion: false
   use_l1c2l2a_adapter: false
   unfreeze_last_block: false
-  pretrained: false
+  pretrained: true
   l1c2l2a_Adapter_loc: "${paths.l1c2l2a_Adapter_loc}"
   out_H: 25
   out_W: 25
   temp_enc_type: "attention" 
-  freeze_msclip: false
+  learned_query: true
+  freeze_msclip: true
   clearclip:
     enabled: false          
     apply_to_last_n: 1     
@@ -44,7 +45,7 @@ SOLVER:
   lr_min: 1e-6
   num_cycles: 1
   lr_base: 1e-3
-  weight_decay: 0.01
+  weight_decay: 0.1
   accumulate_grad_batches: 1
 
 DATASETS:
@@ -80,7 +81,7 @@ DATASETS:
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "MS-CLIP_randomInit"
+  experiment_name: "MS-CLIP_Fixed_LearnedQuery"
   save_path: "./results/models"
   train_metrics_steps: 200 
   save_steps: 10000

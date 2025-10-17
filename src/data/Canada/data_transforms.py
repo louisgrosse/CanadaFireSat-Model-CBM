@@ -44,6 +44,7 @@ from src.data.augmentations import (
     band_order_probe,
     DebugTapOnce,
     DOSApproxL1CtoL2A,
+    StashLabelBeforeDownsample,
     StatsTap,
 )
 from src.data.utils import extract_stats
@@ -57,6 +58,17 @@ MSCLIP_STDS  = [1205.586, 1223.713, 1399.638, 1403.298,
                 1378.513, 1434.924, 1491.141, 1454.089,
                 1473.248, 1365.08]
 
+from functools import partial
+
+def identity_dict(x):
+    return x
+
+def multiply_inputs(sample, factor: float):
+    # sample is a dict; copy if you want to be safe
+    sample = dict(sample)
+    sample["inputs"] = sample["inputs"] * factor
+    return sample
+
 # Test Extension with ColorJittering (RGB only), Coarse Dropout (Extend Masking), Mixup (Potentially in Dataset)
 def Canada_segmentation_transform(
     model_config: Dict[str, Any],
@@ -68,7 +80,7 @@ def Canada_segmentation_transform(
     with_doy: bool = True,
     with_loc: bool = True,
     img_only: bool = True,
-    use_msclip_norm: bool = True,
+    use_msclip_norm: bool = False,
     **kwargs,
 ) -> transforms.Compose:
     """SITS augmentation pipeline
@@ -102,10 +114,10 @@ def Canada_segmentation_transform(
             Rescale(output_size=(model_config["input_img_res"], model_config["input_img_res"])),
             Concat(concat_keys=["10x", "20x", "60x"]),      
             #StatsTap("pre-norm"),               
-            transforms.Lambda(lambda s: {**s, "inputs": s["inputs"] * S2_UINT8_TO_REFLECTANCE}), 
+            transforms.Lambda(partial(multiply_inputs, factor=S2_UINT8_TO_REFLECTANCE)),
             #StatsTap("post-rescale"),
             ReorderBands(MSCLIP_ORDER_10),
-            DebugTapOnce(band_order_probe),          
+            #DebugTapOnce(band_order_probe),          
             #DOSApproxL1CtoL2A(p=1.0),      
             NormalizeMSCLIP(mean=MSCLIP_MEANS, std=MSCLIP_STDS),
             #StatsTap("post-norm-msclip"),
@@ -139,8 +151,9 @@ def Canada_segmentation_transform(
                     ground_truths=["labels"],
                     with_loc=with_loc,
                 ),
+                #StashLabelBeforeDownsample(key_in="labels", key_out="labels_raw"),
                 DownSampleLab(out_H=model_config["out_H"], out_W=model_config["out_W"]),
-                HVFlip(hflip_prob=0.5, vflip_prob=0.5, with_loc=with_loc) if img_only else transforms.Lambda(lambda x: x),
+                HVFlip(hflip_prob=0.5, vflip_prob=0.5, with_loc=with_loc) if img_only else transforms.Lambda(identity_dict),
                 GaussianNoise(var_limit=(0.01, 0.1), p=0.5),
             ]
         else:
@@ -159,7 +172,7 @@ def Canada_segmentation_transform(
                 ground_truths=["labels"],
                 with_loc=with_loc,
             ),
-            HVFlip(hflip_prob=0.5, vflip_prob=0.5, with_loc=with_loc) if img_only else transforms.Lambda(lambda x: x),
+            HVFlip(hflip_prob=0.5, vflip_prob=0.5, with_loc=with_loc) if img_only else transforms.Lambda(identity_dict),
             GaussianNoise(var_limit=(0.01, 0.1), p=0.5),
         ]
 
@@ -191,6 +204,7 @@ def Canada_segmentation_transform(
                     ground_truths=["labels"],
                     with_loc=with_loc,
                 ),
+                #StashLabelBeforeDownsample(key_in="labels", key_out="labels_raw"),
                 DownSampleLab(out_H=model_config["out_H"], out_W=model_config["out_W"]),
             ]
         else:
@@ -364,7 +378,7 @@ def EnvCanada_segmentation_transform(
     transform_list.append(
         DownSampleLab(out_H=model_config["out_H"], out_W=model_config["out_W"])
         if env_only
-        else transforms.Lambda(lambda x: x)
+        else transforms.Lambda(identity_dict)
     )
 
     if is_training:
@@ -373,7 +387,7 @@ def EnvCanada_segmentation_transform(
                 (
                     HVFlip(hflip_prob=0.5, vflip_prob=0.5, with_loc=with_loc)
                     if env_only
-                    else transforms.Lambda(lambda x: x)
+                    else transforms.Lambda(identity_dict)
                 ),
                 GaussianNoise(var_limit=(0.01, 0.1), p=0.5),
             ]

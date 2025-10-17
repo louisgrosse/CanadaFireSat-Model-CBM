@@ -7,7 +7,7 @@ def get_model(config, device):
     arch = config['MODEL']['architecture']
 
     if arch in ["TSViT", "ConvLSTM", "ResNet", "ViT", "ViTFacto","MSClipFacto","L1C2L2AAdapterModel"]:
-        return ImgModule(config).to(device)
+        return ImgModule(config)
 
     elif arch in [
         "TabTSViT",

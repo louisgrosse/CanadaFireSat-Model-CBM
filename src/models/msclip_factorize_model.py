@@ -18,8 +18,8 @@ class DOYEmbed(nn.Module):
         self.fc = nn.Linear(2, embed_dim)
 
     def forward(self, doy):
-        # doy: [B, T] integers (1–365)
-        theta = 2 * math.pi * doy / 365.0
+        # doy: [B, T] integers (0–1)
+        theta = 2 * math.pi * doy
         sin = torch.sin(theta)
         cos = torch.cos(theta)
         cyc = torch.stack([sin, cos], dim=-1)   # [B, T, 2]
@@ -27,10 +27,16 @@ class DOYEmbed(nn.Module):
 
 
 class TemporalAttention(nn.Module):
-    def __init__(self, embed_dim, num_heads=4, dropout=0.1):
+    def __init__(self, embed_dim, num_heads=4, dropout=0.1, learned_query=False):
         super().__init__()
         self.attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
         self.norm = nn.LayerNorm(embed_dim)
+
+        self.last_attn_weights = None 
+        self.learned_query = learned_query
+
+        if self.learned_query:
+            self.pool_q = nn.Parameter(torch.randn(1, 1, embed_dim))
 
     def forward(self, x, doy_emb=None):
         # x: [B*P, T, D]
@@ -43,6 +49,14 @@ class TemporalAttention(nn.Module):
 
         attn_out, _ = self.attn(q_in, k_in, x) 
         x = self.norm(attn_out + x)
+
+        if self.learned_query:
+            BPT, T, D = x.shape
+            q = self.pool_q.expand(BPT, 1, D)
+            pooled, w = self.attn(q, x, x)
+            self.last_attn_weights = w.squeeze(1)  # [B*P, T]
+            return pooled.squeeze(1)
+
         return x.mean(dim=1) 
 
 
@@ -67,6 +81,8 @@ class MSClipFactorizeModel(nn.Module):
         l1c2l2a_dropout: int = 0,
         l1c2l2a_Adapter_loc:str = "",
         unfreeze_last_block:bool = True,
+        learned_query: bool = False,
+        pretrained: bool = True,
         model_config: Dict[str, Any] = None,
         **kwargs,
         ):
@@ -82,7 +98,7 @@ class MSClipFactorizeModel(nn.Module):
         self.use_cls_fusion = use_cls_fusion
 
         msclip_model, preprocess, tokenizer = build_model(
-            model_name=model_name, pretrained=True, ckpt_path=ckpt_path, device="cpu", channels=channels
+            model_name=model_name, pretrained=pretrained, ckpt_path=ckpt_path, device="cpu", channels=channels
         )
         self.msclip_model   = msclip_model            
         self.image_encoder  = msclip_model.image_encoder  
@@ -98,8 +114,16 @@ class MSClipFactorizeModel(nn.Module):
             for p in self.msclip_model.parameters():
                 p.requires_grad = False
 
-        if unfreeze_last_block:
-            self._unfreeze_last_vit_blocks(n_blocks=1)
+            if unfreeze_last_block:
+                self._unfreeze_last_vit_blocks(n_blocks=1)
+        else:
+            for name, p in self.msclip_model.named_parameters():
+                if not name.startswith("image_encoder."):
+                    p.requires_grad = False
+
+            for n, p in self.msclip_model.named_parameters():
+                if any(n.startswith(prefix) for prefix in ["text_encoder.", "text_projection", "logit_scale", "text_transformer"]):
+                    p.requires_grad = False
 
         requires_enc_grad = any(p.requires_grad for p in self.image_encoder.parameters())
         ctx = torch.enable_grad() if requires_enc_grad and self.training else torch.no_grad()
@@ -131,12 +155,12 @@ class MSClipFactorizeModel(nn.Module):
             self.doy_embed = DOYEmbed(self.embed_dim)
 
         if temp_enc_type == "attention":
-            self.temp_enc = TemporalAttention(embed_dim=self.embed_dim, num_heads=8, dropout=0.1)
+            self.temp_enc = TemporalAttention(embed_dim=self.embed_dim, num_heads=8, dropout=0.1, learned_query=learned_query)
         else:
             raise ValueError(f"Unknown temp_enc_type: {temp_enc_type}")
 
         if self.use_cls_fusion and self.has_cls_token:
-            self.cls_temp_enc = TemporalAttention(embed_dim=self.embed_dim, num_heads=4, dropout=0.1)
+            self.cls_temp_enc = TemporalAttention(embed_dim=self.embed_dim, num_heads=4, dropout=0.1, learned_query=learned_query)
             self.cls_fuse_proj = nn.Linear(self.embed_dim, self.embed_dim)
 
         self.head = nn.Conv2d(self.embed_dim, num_classes, 1)
@@ -159,16 +183,11 @@ class MSClipFactorizeModel(nn.Module):
         n = max(1, min(n_blocks, len(blocks)))
         last_blocks = blocks[-n:]
 
-        # first freeze everything
-        for p in self.msclip_model.parameters():
-            p.requires_grad = False
-
         # then unfreeze the selected blocks + final LayerNorm if you wish
         for b in last_blocks:
             for p in b.parameters():
                 p.requires_grad = True
 
-        # optional: unfreeze the last normalization layer
         if hasattr(self.image_encoder.model.visual, "ln_post"):
             for p in self.image_encoder.model.visual.ln_post.parameters():
                 p.requires_grad = True
@@ -187,9 +206,10 @@ class MSClipFactorizeModel(nn.Module):
 
         assert self.patch_size <= H and self.patch_size <= W, f"patch {self.patch_size} > ({H},{W})"
 
-        with torch.no_grad():
-            feats = self.image_encoder.get_patch_embeddings(x)  # [B*T, P(+1), D]
-            assert torch.isfinite(feats).all(), "encoder outputs contain NaN/Inf"
+        requires_enc_grad = any(p.requires_grad for p in self.image_encoder.parameters())
+        ctx = torch.enable_grad() if requires_enc_grad and self.training else torch.no_grad()
+        with ctx:
+            feats = self.image_encoder.get_patch_embeddings(x)
 
         if self.has_cls_token:
             cls_feats = feats[:, 0, :]            # [B*T, D]
@@ -208,19 +228,22 @@ class MSClipFactorizeModel(nn.Module):
         # (B*P, T, D)
         patch_feats = patch_feats.permute(0, 2, 1, 3).contiguous().view(B * self.num_patches, T, self.embed_dim)
 
+        doy_emb = None
         if self.use_doy and doy is not None:
+            assert doy.shape[0] == B and doy.shape[1] == T, f"DOY shape mismatch: {doy.shape} vs {(B,T)}"
             if doy.ndim > 2:  # [B,T,H,W,1] -> [B,T]
                 doy = doy.view(B, T, -1)[:, :, 0]
             assert doy.shape == (B, T), f"DOY must be [B,T], got {tuple(doy.shape)}"
             assert torch.isfinite(doy).all(), "DOY has NaN/Inf"
 
-            doy = doy.clamp(1, 366)
+            doy = doy.clamp(0, 1)
             doy_emb = self.doy_embed(doy)  # [B,T,D]
             doy_emb = doy_emb.unsqueeze(1).expand(-1, self.num_patches, -1, -1).reshape(
                 B * self.num_patches, T, self.embed_dim
             )
         else:
             doy_emb = None
+
 
         patch_feats = self.temp_enc(patch_feats, doy_emb=doy_emb)  # [B*P, D]
         assert torch.isfinite(patch_feats).all(), "Temporal encoder produced NaN/Inf"
