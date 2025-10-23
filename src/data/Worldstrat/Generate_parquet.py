@@ -21,7 +21,7 @@ OUT_ROOT = "/home/louis/Code/wildfire-forecast/worldstrat/"
 RES_10 = (264, 264)
 RES_20 = (132, 132)
 RES_60 = (44, 44)
-BATCH_SIZE = 1000  # write to disk every 1000 pairs
+BATCH_SIZE = 200  # write to disk every 1000 pairs
 
 # Split ratios
 TRAIN_RATIO = 0.8
@@ -72,11 +72,11 @@ def parse_date_from_filename(fname):
 def assign_split():
     r = random.random()
     if r < TRAIN_RATIO:
-        return "data"
+        return "train"
     elif r < TRAIN_RATIO + VAL_RATIO:
-        return "data"
+        return "val"
     else:
-        return "data"
+        return "test"
 
 
 def create_parquet():

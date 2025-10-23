@@ -57,6 +57,18 @@ MSCLIP_STDS  = [1205.586, 1223.713, 1399.638, 1403.298,
                 1378.513, 1434.924, 1491.141, 1454.089,
                 1473.248, 1365.08]
 
+from functools import partial
+
+def identity_dict(x):
+    return x
+
+def multiply_inputs(sample, factor: float):
+    # sample is a dict; copy if you want to be safe
+    sample = dict(sample)
+    sample["inputs"] = sample["inputs"] * factor
+    return sample
+  
+  
 # Test Extension with ColorJittering (RGB only), Coarse Dropout (Extend Masking), Mixup (Potentially in Dataset)
 def Canada_segmentation_transform(
     model_config: Dict[str, Any],
@@ -105,7 +117,7 @@ def Canada_segmentation_transform(
             transforms.Lambda(lambda s: {**s, "inputs": s["inputs"] * S2_UINT8_TO_REFLECTANCE}), 
             #StatsTap("post-rescale"),
             ReorderBands(MSCLIP_ORDER_10),
-            DebugTapOnce(band_order_probe),          
+            #DebugTapOnce(band_order_probe),          
             #DOSApproxL1CtoL2A(p=1.0),      
             NormalizeMSCLIP(mean=MSCLIP_MEANS, std=MSCLIP_STDS),
             #StatsTap("post-norm-msclip"),
@@ -118,7 +130,12 @@ def Canada_segmentation_transform(
             Rescale(output_size=(model_config["input_img_res"], model_config["input_img_res"])),
             Concat(concat_keys=["10x", "20x", "60x"]),  # Order is important for RGB weights
             ReorderBands(MSCLIP_ORDER_10),
+            #DebugTapOnce(band_order_probe),  
             Normalize(mean=mean_array, std=std_array),
+            #StatsTap("post-norm-msclip"),
+            #ReorderBands(MSCLIP_ORDER_10),
+            #DebugTapOnce(band_order_probe),    
+            #StatsTap("post-norm-msclip"),
         ]
 
     # Regularization Image Transforms
@@ -141,7 +158,7 @@ def Canada_segmentation_transform(
                 ),
                 DownSampleLab(out_H=model_config["out_H"], out_W=model_config["out_W"]),
                 HVFlip(hflip_prob=0.5, vflip_prob=0.5, with_loc=with_loc) if img_only else transforms.Lambda(lambda x: x),
-                GaussianNoise(var_limit=(0.01, 0.1), p=0.5),
+                #GaussianNoise(var_limit=(0.01, 0.1), p=0.5),
             ]
         else:
             img_transform_list = [
@@ -160,7 +177,7 @@ def Canada_segmentation_transform(
                 with_loc=with_loc,
             ),
             HVFlip(hflip_prob=0.5, vflip_prob=0.5, with_loc=with_loc) if img_only else transforms.Lambda(lambda x: x),
-            GaussianNoise(var_limit=(0.01, 0.1), p=0.5),
+            #GaussianNoise(var_limit=(0.01, 0.1), p=0.5),
         ]
 
         if with_loc:
@@ -176,6 +193,7 @@ def Canada_segmentation_transform(
         
         img_transform_list.append(CutOrPad(max_seq_len=model_config["train_max_seq_len"], sampling_type="random"))
         img_transform_list.append(UnkMask(unk_class=-999, ground_truth_target="labels"))
+        
         if use_msclip_norm:
             img_transform_list.append(ToTCHW_MSCLIP())
         else:

@@ -1,0 +1,40 @@
+defaults:
+  - _self_
+  - global_config
+
+DATA:
+  # Use your manifest paths
+  train_features: "/home/louis/Code/wildfire-forecast/sae_features_mm/train/features.npy"
+
+SAE:
+  d_in: null           
+  nb_concepts: 4096
+  top_k: 4
+  device: "cuda"
+
+TRAIN:
+  nb_epochs: 50        
+  batch_size: 1024
+  lr: 1.0e-3
+  num_workers: 8
+  stats_max_tokens: 200000     # how many tokens to estimate mean/std
+  lambda_l1_codes: 1.0e-3
+  lambda_usage: 1.0e-3
+  lambda_auxk: 0.1            
+
+
+OUTPUT:
+  out_dir: "/home/louis/Code/wildfire-forecast/topk_overcomplete_runs/clip768_k10_m16k"
+
+SET-UP:
+  seed: 42
+  local_device_ids: [0]
+
+CHECKPOINT:
+  load_from_checkpoint:
+  experiment_name: "SAE_training2"
+  save_path: "./results/topk_overcomplete_runs"
+  train_metrics_steps: 200 
+  save_steps: 10000
+  wandb_project: "${wandb.project}"
+  wandb_user: "${wandb.user}"

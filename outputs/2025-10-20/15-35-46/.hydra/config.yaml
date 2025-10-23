@@ -1,0 +1,93 @@
+CHECKPOINT:
+  experiment_name: MS-CLIP_Fixed
+  load_from_checkpoint: null
+  save_path: results/models/MS-CLIP_Fixed
+  save_steps: 10000
+  train_metrics_steps: 200
+  wandb_project: wildfire-forecast
+  wandb_user: louis-grosse-epfl
+DATASETS:
+  eval:
+    batch_size: 12
+    data_dir: /home/louis/Code/wildfire-forecast/hug_data/Ontario
+    num_workers: 8
+  kwargs:
+    bands:
+    - B2
+    - B3
+    - B4
+    - B5
+    - B6
+    - B7
+    - B8
+    - B8A
+    - B11
+    - B12
+    mean_file: /home/louis/Code/data/metadata/bands_mean.json
+    std_file: /home/louis/Code/data/metadata/bands_std.json
+    use_msclip_norm: false
+    with_doy: true
+    with_loc: false
+  mode: huggingface
+  train:
+    batch_size: 12
+    data_dir: /home/louis/Code/wildfire-forecast/hug_data/Ontario
+    num_workers: 8
+MODEL:
+  architecture: MSClipFacto
+  channels: 10
+  clearclip:
+    apply_to_last_n: 1
+    enabled: false
+    keep_ffn: false
+    keep_residual: false
+    override_forward_for_dense: true
+    ss_attn_iter: 1
+    ss_attn_temp: null
+    use_self_self_attn: true
+  ds_labels: false
+  freeze_msclip: true
+  img_res: 224
+  input_dim: 10
+  input_img_res: 264
+  l1c2l2a_Adapter_loc: /work/eceo/grosse/l1c2l2a_linear.pt
+  msclip_ckpt: ''
+  msclip_model_name: Llama3-MS-CLIP-Base
+  num_classes: 2
+  out_H: 25
+  out_W: 25
+  patch_size: 16
+  temp_enc_type: attention
+  threshold: 0.5
+  train_max_seq_len: 5
+  unfreeze_last_block: false
+  use_cls_fusion: false
+  use_l1c2l2a_adapter: false
+  val_max_seq_len: 5
+SET-UP:
+  local_device_ids:
+  - 0
+  - 1
+  - 2
+  - 3
+  seed: 42
+SOLVER:
+  accumulate_grad_batches: 1
+  loss_function: masked_dice_loss
+  lr_base: 0.001
+  lr_min: 1.0e-06
+  lr_scheduler: cosine
+  lr_start: 1.0e-05
+  num_cycles: 1
+  num_epochs: 30
+  num_steps_train: 5767
+  num_warmup_epochs: 2
+  weight_decay: 0.1
+paths:
+  bands_mean: /home/louis/Code/data/metadata/bands_mean.json
+  bands_std: /home/louis/Code/data/metadata/bands_std.json
+  hf_data: /home/louis/Code/wildfire-forecast/hug_data/Ontario
+  l1c2l2a_Adapter_loc: ''
+wandb:
+  project: wildfire-forecast
+  user: louis-grosse-epfl

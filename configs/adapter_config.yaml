@@ -2,9 +2,16 @@ defaults:
   - _self_
   - global_config
 
+LOGGING:
+  sanity_batches: 2   
+  per_band: true      
+  percentiles: [1, 50, 99]
+
 MODEL:
   architecture: "L1C2L2AAdapterModel"
   msclip_model_name: "Llama3-MS-CLIP-Base"
+  model_type: embed_affine  # or: embed_dlr, embed_wct, linear
+  pool: token
   msclip_ckpt: ""
   channels: 10
   input_img_res: 264
@@ -24,14 +31,13 @@ MODEL:
   l1c2l2a_dropout: 0.1
 
 SOLVER:
-  num_epochs: 10
-  loss_function: masked_dice_loss
-  num_warmup_epochs: 2
-  lr_start: 1e-6
-  lr_min: 1e-6
-  lr_base: 3e-4
-  accumulate_grad_batches: 1
-  weight_decay: 0.0
+  lr: 1e-3
+  weight_decay: 1e-4
+  amp: false
+  epochs: 0
+  lambda_id: 1e-3               # keep near-identity
+  lambda_coral: 1e-2            # only matters if MODEL.pool == "token"
+  lambda_l2: 0.0
 
 DATASETS:
   mode: "worldstrat"
@@ -54,17 +60,18 @@ DATASETS:
     with_doy: True
   train:
     data_dir: "/home/louis/Code/wildfire-forecast/worldstrat/data"
-    batch_size: 12
+    batch_size: 32
     num_workers: 8
   eval:
     data_dir: "/home/louis/Code/wildfire-forecast/worldstrat/data"
-    batch_size: 12
+    batch_size: 32
     num_workers: 8
+    io_batch_size: 64 
 
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "L1C2L2AAdapter_train"
+  experiment_name: "L1C2L2AAdapter_train_embed_affine"
   save_path: "./results/models"
   save_steps: 10000
   train_metrics_steps: 200

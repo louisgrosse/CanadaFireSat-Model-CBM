@@ -659,7 +659,16 @@ class ToTHWC(object):
     """
 
     def __call__(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        sample["inputs"] = sample["inputs"].permute(0, 2, 3, 1)
+        x = sample["inputs"]
+        if x.ndim == 4: 
+            if x.shape[1] in (224, 256): 
+                x = x.permute(0, 3, 1, 2).contiguous()  # [T,H,W,C] → [T,C,H,W]
+
+        elif x.ndim == 5:  
+            if x.shape[2] in (224, 256): 
+                x = x.permute(0, 1, 4, 2, 3).contiguous()  # [B,T,H,W,C] → [B,T,C,H,W]
+        sample["inputs"] = x
+        
         sample["labels"] = sample["labels"].permute(1, 2, 0)
         sample["unk_masks"] = sample["unk_masks"].permute(1, 2, 0)
         return sample

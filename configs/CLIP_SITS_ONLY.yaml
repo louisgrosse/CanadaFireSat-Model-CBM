@@ -41,8 +41,8 @@ SOLVER:
   num_warmup_epochs: 2
   loss_function: masked_dice_loss #combined_dice_ce or masked_dice_loss
   lr_scheduler: 'cosine'
-  lr_start: 1e-6
-  lr_min: 1e-5
+  lr_start: 1e-7
+  lr_min: 1e-6
   num_cycles: 1
   lr_base: 3e-4
   weight_decay: 0.1
@@ -55,7 +55,7 @@ DATASETS:
     std_file: "${paths.bands_std}"
     with_loc: False
     with_doy: True
-    use_msclip_norm: true
+    use_msclip_norm: false
     bands: [
               "B2",
               "B3",
@@ -81,7 +81,7 @@ DATASETS:
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "MS-CLIP"
+  experiment_name: "MS-CLIP_Fixed_Ontario_Alberta_Fast"
   save_path: "./results/models"
   train_metrics_steps: 200 
   save_steps: 10000
