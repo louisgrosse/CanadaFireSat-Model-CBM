@@ -193,3 +193,7 @@ pyrightconfig.json
 
 # HuggingFace Data
 /hug_data
+
+
+/outputs
+/wildfire-forecast

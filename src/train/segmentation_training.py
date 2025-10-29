@@ -17,26 +17,6 @@ from src.data.Canada.callback import FWICallback, WeightLossCallback, SwitchAllC
 from src.models import get_model
 from src.utils.torch_utils import load_from_checkpoint
 
-sys.path.insert(0, os.getcwd())
-
-
-# ---- Sanity probe (run once before training) -------------------------------
-import torch
-import torch.nn.functional as F
-
-# If you have these available, fill them; otherwise the probe will skip de-norm NDVI:
-MSCLIP_MEANS = torch.tensor([925.161,1183.128,1338.041,1667.254,2233.633,2460.96,2555.569,2619.542,2406.497,1841.645], dtype=torch.float32)
-MSCLIP_STDS  = torch.tensor([1205.586,1223.713,1399.638,1403.298,1378.513,1434.924,1491.141,1454.089,1473.248,1365.08], dtype=torch.float32)
-
-def _corr2(a,b):
-    # a,b: [N,H,W]
-    am = a.mean(dim=(1,2), keepdim=True); bm = b.mean(dim=(1,2), keepdim=True)
-    an = a - am; bn = b - bm
-    num = (an*bn).mean(dim=(1,2))
-    den = (an.pow(2).mean(dim=(1,2)).sqrt() * bn.pow(2).mean(dim=(1,2)).sqrt() + 1e-6)
-    return (num/den).mean().item()
-
-# ---- Sanity probe (run once before training) -------------------------------
 import torch
 import torch.nn.functional as F
 
@@ -215,6 +195,7 @@ def train_and_evaluate(cfg: DictConfig):
         project=cfg["CHECKPOINT"]["wandb_project"],
         entity=cfg["CHECKPOINT"]["wandb_user"],
         name=cfg["CHECKPOINT"]["experiment_name"],
+        group=cfg["CHECKPOINT"]["group"],
     )
 
     # Copy the config file to the save_path and wandb
@@ -233,96 +214,19 @@ def train_and_evaluate(cfg: DictConfig):
         accumulate_grad_batches=cfg["SOLVER"]["accumulate_grad_batches"],
         reload_dataloaders_every_n_epochs=reload_dataloaders_every_n_epochs,
     )
+
+    _debug_trainables(net)
 
     # Start training
     trainer.fit(model=net, datamodule=datamodule)
 
-@hydra.main(version_base=None, config_path=str(CONFIG_PATH))
-def train_and_evaluate_CLIP(cfg: DictConfig):
-    """Training and Evaluation (Val) Endpoint"""
 
-    cfg = OmegaConf.to_container(cfg, resolve=True)
-
-    # Extract key variables from the config
-    num_epochs = cfg["SOLVER"]["num_epochs"]
-    save_steps = cfg["CHECKPOINT"]["save_steps"]
-    save_path = cfg["CHECKPOINT"]["save_path"]
-    save_path = Path(save_path) / cfg["CHECKPOINT"]["experiment_name"]
-    cfg["CHECKPOINT"]["save_path"] = str(save_path)
-    save_path.mkdir(parents=True, exist_ok=True)
-    checkpoint = cfg["CHECKPOINT"]["load_from_checkpoint"]
-    local_device_ids = cfg["SET-UP"]["local_device_ids"]  # List of integers ids for GPUs
-    arch_name = cfg["MODEL"]["architecture"]
-    device = get_device(local_device_ids, allow_cpu=False)
-    seed_everything(cfg["SET-UP"]["seed"])
-    
-    datamodule = get_data(cfg)
-    cfg["SOLVER"]["num_steps_train"] = len(datamodule.train_dataloader())
-
-    # Initialize model & Load weights
-    net = get_model(cfg, device)
-    if checkpoint:
-        load_from_checkpoint(net, checkpoint)
-
-    # Set-up model checkpoint & callbacks
-    checkpoint_callback_IoU = ModelCheckpoint(
-        monitor="fire_F1",  # Not sure name macro/IOU
-        dirpath=save_path,
-        filename=f"{arch_name}-" + "{epoch:02d}-f1-{fire_F1:.2f}",
-        mode="max",
-        save_top_k=3,
-        auto_insert_metric_name=False,
-    )
-    checkpoint_callback_step = ModelCheckpoint(
-        dirpath=save_path,
-        filename=f"{arch_name}-" + "{epoch:02d}-step-{step:.2f}",
-        save_top_k=-1,
-        every_n_train_steps=save_steps,
-        auto_insert_metric_name=False,
-    )
-    callbacks = [checkpoint_callback_IoU, checkpoint_callback_step]
-    reload_dataloaders_every_n_epochs = 0
-    if "pos_epochs" in cfg["DATASETS"]["train"]:
-        switch_callback = SwitchAllCallback(config=cfg)
-        callbacks.append(switch_callback)
-        reload_dataloaders_every_n_epochs = 1
-
-    if "fwi_ths" in cfg["DATASETS"]["train"]:
-        fwi_callback = FWICallback(config=cfg)
-        callbacks.append(fwi_callback)
-        reload_dataloaders_every_n_epochs = 1
-
-    if "weights" in cfg["SOLVER"]:
-        loss_callback = WeightLossCallback(config=cfg)
-        callbacks.append(loss_callback)
-
-    # Set-up Wandb logger
-    wandb_logger = WandbLogger(
-        project=cfg["CHECKPOINT"]["wandb_project"],
-        entity=cfg["CHECKPOINT"]["wandb_user"],
-        name=cfg["CHECKPOINT"]["experiment_name"],
-    )
-
-    # Copy the config file to the save_path and wandb
-    copy_yaml(cfg)
-    wandb_logger.log_hyperparams(cfg)
-
-    # Set-up Trainer
-    trainer = Trainer(
-        max_epochs=num_epochs,
-        devices=local_device_ids,
-        logger=wandb_logger,
-        callbacks=callbacks,
-        enable_progress_bar=True,
-        accelerator="gpu",
-        # strategy="ddp",
-        accumulate_grad_batches=cfg["SOLVER"]["accumulate_grad_batches"],
-        reload_dataloaders_every_n_epochs=reload_dataloaders_every_n_epochs,
-    )
-
-    # Start training
-    trainer.fit(model=net, datamodule=datamodule) 
-
+def _debug_trainables(model):
+        n = 0
+        for n_, p in model.named_parameters():
+            if p.requires_grad:
+                n += p.numel()
+        print("trainable params:", n)
 
 if __name__ == "__main__":
     train_and_evaluate()

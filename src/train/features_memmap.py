@@ -12,6 +12,7 @@ import json
 from tqdm.auto import tqdm
 from pathlib import Path
 from typing import Optional
+import sys
 
 import hydra
 import numpy as np
@@ -36,13 +37,7 @@ def prehead_forward(model: torch.nn.Module, x: torch.Tensor, doy: Optional[torch
     requires_enc_grad = any(p.requires_grad for p in model.image_encoder.parameters())
     ctx = torch.enable_grad() if requires_enc_grad and model.training else torch.no_grad()
     with ctx:
-        feats = model.image_encoder.get_patch_embeddings(x)
-
-    if model.has_cls_token:
-        cls_feats = feats[:, 0, :]            # [B*T, D]
-        patch_feats = feats[:, 1:, :]         # [B*T, P, D]
-    else:
-        cls_feats, patch_feats = None, feats
+        pooled_feats, patch_feats = model.msclip_model.image_encoder(x)
 
     # [B, T, P, D]
     patch_feats = patch_feats.view(B, T, model.num_patches, model.embed_dim)
@@ -90,9 +85,15 @@ def prehead_forward(model: torch.nn.Module, x: torch.Tensor, doy: Optional[torch
 
 def _first_batch_shapes(dataloader, model, device):
     b0 = next(iter(dataloader))
+    if isinstance(b0, (list, tuple)):
+        b0 = b0[0]
     x = b0["inputs"].to(device, non_blocking=True)
     doy = b0.get("doy", None)
     if doy is not None:
+        if doy.ndim == 5:   # [B, T, H, W, C]
+            if doy.shape[-1] == 1:
+                doy = doy[..., 0] 
+            doy = doy.float().mean(dim=(2,3))
         doy = doy.to(device, non_blocking=True)
     feats = prehead_forward(model.model, x, doy)  # [B,D,Hp,Wp]
     _, D, Hp, Wp = feats.shape
@@ -112,28 +113,29 @@ def _num_items(dataloader):
 def _split_loader(dm, name: str):
     try:
         if name == "train":
-            print("testtest")
             return dm.train_dataloader()
         elif name == "validation":
             return dm.val_dataloader()
+        elif name =="test":
+            return dm.test_dataloader(split="test")
     except Exception:
         return None
 
 
-def _open_mm(path: Path, shape, dtype="float16"):
+def _open_mm(path: Path, shape, dtype="float32"):
     path.parent.mkdir(parents=True, exist_ok=True)
     return open_memmap(str(path), mode="w+", dtype=dtype, shape=shape)
 
 
-@hydra.main(version_base=None, config_path="/home/louis/Code/CanadaFireSat-Model-CBM/results/models/MS-CLIP_Fixed_Ontario_Alberta_Slow")
+@hydra.main(version_base=None, config_path="/home/louis/Code/CanadaFireSat-Model-CBM/results/models/MS-CLIP_Fixed3_Ontario_Alberta")
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_container(cfg, resolve=True)
 
-    out_root = Path(cfg.setdefault("OUTPUT", {}).setdefault("out_dir", "./sae_features_mm"))
-    dtype = cfg["OUTPUT"].get("dtype", "float16")  # float16 | float32
-    splits = cfg.setdefault("DUMP", {}).setdefault("splits", ["train", "val", "test"])
+    out_root = Path(cfg["CHECKPOINT"].get("load_from_checkpoint", "")).parent
+    dtype = "float32"  # float16 | float32
+    splits = ["train", "validation", "test"]
 
-    device = get_device(cfg["SET-UP"]["local_device_ids"], allow_cpu=False)
+    device = 0
     dm = get_data(cfg)
     model = get_model(cfg, device)
     ckpt = cfg["CHECKPOINT"].get("load_from_checkpoint", "")
@@ -148,7 +150,7 @@ def main(cfg: DictConfig):
         if dl is None:
             print(f"[skip] split={split}")
             continue
-
+        
         D, Hp, Wp = _first_batch_shapes(dl, model, device)
         N = _num_items(dl)
 
@@ -160,6 +162,8 @@ def main(cfg: DictConfig):
         pbar = tqdm(total=total_batches, desc=f"Dump {split}", unit="batch")
         cursor = 0
         for batch in dl:
+            if isinstance(batch, (list, tuple)):
+                batch = batch[0]
             x = batch["inputs"].to(device, non_blocking=True)
             doy = batch.get("doy", None)
             if doy is not None:

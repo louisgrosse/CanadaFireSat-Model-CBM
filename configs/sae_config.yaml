@@ -6,35 +6,160 @@ DATA:
   # Use your manifest paths
   train_features: "/home/louis/Code/wildfire-forecast/sae_features_mm/train/features.npy"
 
-SAE:
-  d_in: null           
-  nb_concepts: 4096
-  top_k: 4
-  device: "cuda"
-
-TRAIN:
-  nb_epochs: 50        
-  batch_size: 1024
-  lr: 1.0e-3
+datamodule:
+  _target_: src.data.hf_Canada.sae_datamodule.SimpleActivationsDataModule
+  train_path:  /home/louis/Code/wildfire-forecast/sae_features_mm/train/features.npy
+  val_path:   /home/louis/Code/wildfire-forecast/sae_features_mm/validation/features.npy
+  test_path:  /home/louis/Code/wildfire-forecast/sae_features_mm/test/features.npy
+  batch_size: 4096
   num_workers: 8
-  stats_max_tokens: 200000     # how many tokens to estimate mean/std
-  lambda_l1_codes: 1.0e-3
-  lambda_usage: 1.0e-3
-  lambda_auxk: 0.1            
+  normalize: true
+  stats_path: /home/louis/Code/CanadaFireSat-Model-CBM/results/topk_overcomplete_runs/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}/stats/activations_stats.npz  # supports .json or .npz
+  
+model:
+  net:
+    _target_: src.models.msclip_factorize_model.MSClipFactorizeModel  # example path
+    pretrained: false
+
+task_name: "train-sae"
+
+callbacks:
+  - _target_: pytorch_lightning.callbacks.ModelCheckpoint
+    dirpath: /home/louis/Code/CanadaFireSat-Model-CBM/results/topk_overcomplete_runs/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}
+    filename: "epoch_{epoch:03d}"
+    monitor: "val/loss" # name of the logged metric which determines when model is improving
+    verbose: False # verbosity mode
+    save_last: True # additionally always save an exact copy of the last checkpoint to a file last.ckpt
+    save_top_k: 2 # save k best models (determined by above metric)
+    mode: "min" # "max" means higher metric value is better, can be also "min"
+    auto_insert_metric_name: True # when True, the checkpoints filenames will contain the metric name
+    save_weights_only: False # if True, then only the model’s weights will be saved
+    every_n_train_steps: null # number of training steps between checkpoints
+    train_time_interval: null # checkpoints are monitored at the specified time interval
+    every_n_epochs: null # number of epochs between checkpoints
+    save_on_train_epoch_end: null # whether to run checkpointing at the end of the training epoch or the end of validation
 
 
-OUTPUT:
-  out_dir: "/home/louis/Code/wildfire-forecast/topk_overcomplete_runs/clip768_k10_m16k"
 
-SET-UP:
-  seed: 42
-  local_device_ids: [0]
+trainer:
+  _target_: pytorch_lightning.Trainer
+
+  default_root_dir: ${hydra:run.dir}
+
+  min_epochs: ${min_epochs}
+  max_epochs: ${max_epochs}
+  accumulate_grad_batches: 1 # set to 2 for 2x batch size, etc.
+
+  accelerator: gpu
+  devices: 1
+
+  # mixed precision for extra speed-up
+  # precision: 16
+
+  # set True to to ensure deterministic results
+  # makes training slower but gives more reproducibility than just setting seeds
+  deterministic: False
+
+trainer_sae:
+  _target_: pytorch_lightning.Trainer
+
+  default_root_dir: ${paths.output_dir}
+
+  min_epochs: ${sae_min_epochs} # prevents early stopping
+  max_epochs: ${sae_max_epochs}
+  gradient_clip_val: 1.
+
+  accelerator: gpu
+  devices: 1
+
+  # mixed precision for extra speed-up
+  # precision: 16
+
+  # set True to to ensure deterministic results
+  # makes training slower but gives more reproducibility than just setting seeds
+  deterministic: False
+
+sae:
+  _target_: src.models.sae.plSAE
+  sae_type: "topk"
+  loss_type: "mse_auxk"
+  optimizer_type: "adam"
+  lr: ${sae_lr}
+  num_samples: 4500000
+  # resample_steps: [300000, 600000, 900000, 1200000] # Rougly 1.2M steps
+  resample_every_n_epochs: 100 # Equvivalent to NO resampling
+  resample_batch_size: 256
+  bind_init: True
+  # depth_scale_shift: 2
+
+  sae_kwargs:
+    input_shape: ${input_shape}
+    nb_concepts : ${nb_concepts}
+    top_k: ${nb_k}
+    device: ${oc.select:device, "cpu"}
+
+
+min_epochs: 1 
+warmup_epochs: 10 
+max_epochs: 100 
+
+ds_path : ${oc.env:DATASET_PATH}
+ds_path_global : '' # Add Global dataset path 1 deg will complexify the rule-based search space
+
+# Activation Data
+mode_data: ""
+label_down: 20
+train_npy_path: "/home/louis/Code/CanadaFireSat-Model-CBM/sae_features_mm/train/features.npy"
+val_npy_path: "/home/louis/Code/CanadaFireSat-Model-CBM/sae_features_mm/validation/features.npy"
+test_npy_path: "/home/louis/Code/CanadaFireSat-Model-CBM/sae_features_mm/test/features.npy"
+
+hydra:
+  run:
+    dir: ./results/topk_overcomplete_runs/${task_name}/runs/${now:%Y-%m-%d}_${now:%H-%M-%S}
+
+# SAE Arguments
+input_shape: 768
+nb_concepts: 3840   
+nb_k: 4 # See Analysis in Scaling ...
+sae_lr: 5e-3
+sae_batch_size: 256
+sae_min_epochs: 1
+sae_max_epochs: 20
+sae_ckpt_path: null
+
+tags: ["dev"]
+
+# set False to skip model training
+train: True
+
+# evaluate on test set, using best model weights achieved during training
+# lightning chooses best weights based on the metric specified in checkpoint callback
+test: True
+
+# simply provide checkpoint path to resume training
+ckpt_path: null
+
+# seed for random number generators in pytorch, numpy and python.random
+seed: 42
+
+_target_: src.model.sae_module.plSAE
+sae_type: "topk"
+loss_type: "mse_auxk"
+optimizer_type: "adam"
+lr: ${sae_lr}
+num_samples: 4500000
+# resample_steps: [300000, 600000, 900000, 1200000] # Rougly 1.2M steps
+resample_every_n_epochs: 100 # Equvivalent to NO resampling
+resample_batch_size: 256
+bind_init: True
+# depth_scale_shift: 2
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "SAE_training2"
+  experiment_name: "SAE_training_OA_fastLR"
   save_path: "./results/topk_overcomplete_runs"
   train_metrics_steps: 200 
   save_steps: 10000
   wandb_project: "${wandb.project}"
   wandb_user: "${wandb.user}"
+  group: SAE

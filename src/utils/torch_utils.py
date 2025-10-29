@@ -169,3 +169,4 @@ def initialize_weights_block(module: nn.Module):
     elif isinstance(module, nn.LayerNorm):
         nn.init.ones_(module.weight)  # Initialize LayerNorm weights to 1
         nn.init.zeros_(module.bias)  # Initialize LayerNorm biases to 0
+

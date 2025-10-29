@@ -139,7 +139,10 @@ def evaluate(cfg: DictConfig):
             if cfg["mode"] == "image":
                 sample = data[0]
                 img_name_info = data[1]
-                logits = model(sample["inputs"].unsqueeze(0).to(device))
+                if model.model_type == 'MSclipFacto':
+                    logits = model(sample["inputs"].unsqueeze(0).to(device),sample["doy"].unsqueeze(0).to(device))
+                else:
+                    logits = model(sample["inputs"].unsqueeze(0).to(device))
             else:
 
                 if model.model_type in [
@@ -148,7 +151,6 @@ def evaluate(cfg: DictConfig):
                     "TabResNetConvLSTM",
                     "TabViTFactorizeModel",
                     "MultiViTFactorizeModel",
-                    "MSClipFacto",
                 ]:
 
                     sample = data[0]

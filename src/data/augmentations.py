@@ -646,6 +646,8 @@ class ToTCHW_MSCLIP(object):
             raise ValueError(f"Unexpected input shape {x.shape}")
 
         sample["inputs"] = x
+        sample["labels"] = sample["labels"].permute(1, 2, 0)
+        sample["unk_masks"] = sample["unk_masks"].permute(1, 2, 0)
         return sample
 
 
