@@ -238,6 +238,18 @@ class ImgModule(LightningModule):
             interval=self.interval,
         )
 
+        print("--------------------------------------------->")
+        named = dict(self.model.named_parameters())
+        enc_keys = [k for k in named if ("image_encoder" in k or "visual" in k) and named[k].requires_grad]
+        print("[trainable in encoder]", len(enc_keys), "examples:", enc_keys[:8])
+
+        # also print LR per group
+        for i, g in enumerate(optimizer.param_groups):
+            sample = [p.shape for p in g["params"][:3] if hasattr(p, "shape")]
+            print(f"[param_group {i}] lr={g['lr']} wd={g.get('weight_decay',0)} n={len(g['params'])} sample_shapes={sample}")
+
+        print("--------------------------------------------->")
+        
         return {
             "optimizer": optimizer,
             "lr_scheduler": {

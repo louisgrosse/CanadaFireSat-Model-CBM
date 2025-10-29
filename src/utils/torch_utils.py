@@ -8,22 +8,79 @@ import torch
 from pytorch_lightning import LightningModule
 from torch import nn
 
+def _try_load_state_dict(model, state: dict, strict: bool = False) -> Tuple[list, list]:
+    """Try several key-normalizations to fit the model's state_dict."""
+    # 1) raw
+    try:
+        missing, unexpected = model.load_state_dict(state, strict=strict)
+        return list(missing), list(unexpected)
+    except Exception:
+        pass
 
-def load_from_checkpoint(model: LightningModule, checkpoint: Optional[str] = None, device=None):
+    # 2) strip a single leading namespace like 'state_dict.' / 'model.' / 'module.'
+    def strip_once(prefix, key):
+        return key[len(prefix):] if key.startswith(prefix) else key
 
+    for prefix in ("state_dict.", "model.", "module."):
+        fixed = {strip_once(prefix, k): v for k, v in state.items()}
+        try:
+            missing, unexpected = model.load_state_dict(fixed, strict=strict)
+            return list(missing), list(unexpected)
+        except Exception:
+            pass
+
+    # 3) aggressively strip *all* leading known namespaces
+    def strip_all(k):
+        for p in ("state_dict.", "model.", "module."):
+            if k.startswith(p):
+                k = k[len(p):]
+        return k
+    fixed = {strip_all(k): v for k, v in state.items()}
+    missing, unexpected = model.load_state_dict(fixed, strict=strict)
+    return list(missing), list(unexpected)
+
+def load_from_checkpoint(model, checkpoint: Optional[str] = None, device=None, strict: bool = False):
+    """
+    Load weights into an EXISTING model instance from:
+      - a Lightning .ckpt (expects dict with 'state_dict')
+      - a plain .pth/.pt (expects raw state_dict)
+      - a directory containing such files (uses most recent)
+    """
     assert checkpoint is not None, "no path provided for checkpoint, value is None"
+
+    # Resolve directory -> latest file
     if os.path.isdir(checkpoint):
-        checkpoint = max(glob.iglob(checkpoint + "/*.pth"), key=os.path.getctime)
-        print("loading model from %s" % checkpoint)
-        model.load_from_checkpoint(checkpoint)
+        candidates = []
+        for ext in ("*.ckpt", "*.pth", "*.pt"):
+            candidates += glob.glob(os.path.join(checkpoint, ext))
+        if not candidates:
+            raise FileNotFoundError(f"No .ckpt/.pth/.pt in directory: {checkpoint}")
+        checkpoint = max(candidates, key=os.path.getctime)
+        print(f"loading model from {checkpoint}")
+
     elif os.path.isfile(checkpoint):
-        print("loading model from %s" % checkpoint)
-        model.load_from_checkpoint(checkpoint, map_location=device)
+        print(f"loading model from {checkpoint}")
     else:
-        raise FileNotFoundError("provided checkpoint not found, does not mach any directory or file")
+        raise FileNotFoundError("provided checkpoint not found, does not match any directory or file")
+
+    # Load file
+    ckpt_obj = torch.load(checkpoint, map_location=device)
+
+    # Lightning ckpt
+    if isinstance(ckpt_obj, dict) and "state_dict" in ckpt_obj:
+        state = ckpt_obj["state_dict"]
+    elif isinstance(ckpt_obj, dict):
+        # plain state dict
+        state = ckpt_obj
+    else:
+        raise ValueError(f"Unsupported checkpoint format type={type(ckpt_obj)}")
+
+    missing, unexpected = _try_load_state_dict(model, state, strict=strict)
+    if missing or unexpected:
+        print(f"[load_from_checkpoint] missing keys: {missing[:8]}{'...' if len(missing)>8 else ''}")
+        print(f"[load_from_checkpoint] unexpected keys: {unexpected[:8]}{'...' if len(unexpected)>8 else ''}")
 
     return checkpoint
-
 
 def get_trainable_params(
     model: LightningModule, model_type: str, lr_ratio: float, lr: float, mode: str
@@ -112,3 +169,4 @@ def initialize_weights_block(module: nn.Module):
     elif isinstance(module, nn.LayerNorm):
         nn.init.ones_(module.weight)  # Initialize LayerNorm weights to 1
         nn.init.zeros_(module.bias)  # Initialize LayerNorm biases to 0
+

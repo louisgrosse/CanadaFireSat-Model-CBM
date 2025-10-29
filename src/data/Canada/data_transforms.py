@@ -131,6 +131,7 @@ def Canada_segmentation_transform(
             Concat(concat_keys=["10x", "20x", "60x"]),  # Order is important for RGB weights
             ReorderBands(MSCLIP_ORDER_10),
             Normalize(mean=mean_array, std=std_array),
+            transforms.Lambda(partial(multiply_inputs, factor=0)),
         ]
 
     # Regularization Image Transforms
@@ -154,7 +155,7 @@ def Canada_segmentation_transform(
                 #StashLabelBeforeDownsample(key_in="labels", key_out="labels_raw"),
                 DownSampleLab(out_H=model_config["out_H"], out_W=model_config["out_W"]),
                 HVFlip(hflip_prob=0.5, vflip_prob=0.5, with_loc=with_loc) if img_only else transforms.Lambda(identity_dict),
-                GaussianNoise(var_limit=(0.01, 0.1), p=0.5),
+                #GaussianNoise(var_limit=(0.01, 0.1), p=0.5),
             ]
         else:
             img_transform_list = [
@@ -173,7 +174,7 @@ def Canada_segmentation_transform(
                 with_loc=with_loc,
             ),
             HVFlip(hflip_prob=0.5, vflip_prob=0.5, with_loc=with_loc) if img_only else transforms.Lambda(identity_dict),
-            GaussianNoise(var_limit=(0.01, 0.1), p=0.5),
+            #GaussianNoise(var_limit=(0.01, 0.1), p=0.5),
         ]
 
         if with_loc:

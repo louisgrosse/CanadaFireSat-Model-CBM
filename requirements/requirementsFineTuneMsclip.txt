@@ -1,0 +1,38 @@
+# Core
+torch>=2.1,<2.4
+torchvision>=0.16,<0.19
+numpy>=1.24,<2.0
+pillow>=9,<11
+tqdm>=4.66,<5
+einops>=0.7,<1
+
+# Lightning + logging
+pytorch-lightning>=2.3,<2.5
+wandb>=0.17,<0.18
+PyYAML>=6,<7
+
+# HF + OpenCLIP + MS-CLIP
+huggingface_hub>=0.24,<1
+open_clip_torch>=2.26,<3
+git+https://github.com/IBM/MS-CLIP.git
+
+# Dataset utils used by SSL4EO-S12 helper
+zarr>=2.16,<3
+pandas>=1.5,<2.2
+scipy>=1.10,<1.12
+
+#other
+fastparquet
+
+#Msclip
+tabulate
+open-clip-torch
+transformers
+rasterio
+tifffile
+scikit-learn
+h5py
+fiona
+pyproj
+shapely
+rtree

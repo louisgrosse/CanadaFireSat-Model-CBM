@@ -2,13 +2,13 @@ defaults:
   - _self_
   - global_config
 
-model_path: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP high-batch/MSClipFacto-07-f1-0.37.ckpt" 
-config_name: "config_file.yaml"
+model_path: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_Fixed3/MSClipFacto-19-f1-0.45.ckpt" 
+config_name: "config_file_1_2_3_4_5_6_7.yaml"
 mode: "image"
-split: "val" # test
-output_dir: "/home/grosse/CanadaFireSat-Model-CBM/results/models/'MS-CLIP high-batch'/metrics"
+split: "val" # test, val
+output_dir: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_Fixed3/metrics"
 seed: 42
-with_region: True
+with_region: False
 n_plots: 50
 size_plots: 6
 
@@ -23,19 +23,20 @@ VIS:
   figsize: [10, 3]        
   dpi: 150                
   save_format: "png"   
-  band_map: [2, 1, 0]         # B4,B3,B2 in MS-CLIP order [B2,B3,B4,...]   
+  band_map: [2, 1, 0]         # B4,B3,B2 in MS-CLIP order [B2,B3,B4,...] 
 
 CHECKPOINT:
-  experiment_name: MS-CLIP high-batch
+  experiment_name: MS-CLIP_Fixed3
+  group: V3
   load_from_checkpoint: null
-  save_path: results/models/MS-CLIP high-batch
+  save_path: results/models/MS-CLIP_Fixed3
   save_steps: 10000
   train_metrics_steps: 200
   wandb_project: wildfire-forecast
   wandb_user: louis-grosse-epfl
 DATASETS:
   eval:
-    batch_size: 12
+    batch_size: 24
     data_dir: /work/eceo/CanadaFireSat
     num_workers: 8
   kwargs:
@@ -52,12 +53,12 @@ DATASETS:
     - B12
     mean_file: /work/eceo/CanadaFireSat/metadata/bands_mean.json
     std_file: /work/eceo/CanadaFireSat/metadata/bands_std.json
-    use_msclip_norm: false
+    use_msclip_norm: true
     with_doy: true
     with_loc: false
   mode: huggingface
   train:
-    batch_size: 12
+    batch_size: 24
     data_dir: /work/eceo/CanadaFireSat
     num_workers: 8
 MODEL:
@@ -78,38 +79,35 @@ MODEL:
   input_dim: 10
   input_img_res: 264
   l1c2l2a_Adapter_loc: /work/eceo/grosse/l1c2l2a_linear.pt
+  learned_query: false
   msclip_ckpt: ''
   msclip_model_name: Llama3-MS-CLIP-Base
   num_classes: 2
   out_H: 25
   out_W: 25
   patch_size: 16
-  temp_depth: 2
+  pretrained: true
   temp_enc_type: attention
   threshold: 0.5
   train_max_seq_len: 5
   unfreeze_last_block: false
   use_cls_fusion: false
-  use_conv_decoder: true
   use_l1c2l2a_adapter: false
   val_max_seq_len: 5
 SET-UP:
   local_device_ids:
   - 0
-  - 1
-  - 2
-  - 3
   seed: 42
 SOLVER:
-  accumulate_grad_batches: 1
+  accumulate_grad_batches: 2
   loss_function: masked_dice_loss
-  lr_base: 0.001
-  lr_min: 1.0e-06
+  lr_base: 0.005
+  lr_min: 0.0005
   lr_scheduler: cosine
-  lr_start: 1.0e-05
+  lr_start: 0.0005
   num_cycles: 1
-  num_epochs: 30
-  num_steps_train: 5767
+  num_epochs: 20
+  num_steps_train: 2884
   num_warmup_epochs: 2
   weight_decay: 0.1
 paths:
@@ -117,6 +115,7 @@ paths:
   bands_std: /work/eceo/CanadaFireSat/metadata/bands_std.json
   hf_data: /work/eceo/CanadaFireSat
   l1c2l2a_Adapter_loc: /work/eceo/grosse/l1c2l2a_linear.pt
+  output_dir: /work/eceo/grosse/topk_overcomplete_runs
 wandb:
   project: wildfire-forecast
   user: louis-grosse-epfl

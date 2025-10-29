@@ -1,0 +1,30 @@
+DATA:
+  root: "/work/eceo/grosse/ssl4eo-s12"
+  train_split: "splits/ssl4eos12_train.txt"
+  val_split:   "splits/ssl4eos12_val.txt"
+
+TRAIN:
+  batch_size_zarr: 2          # each “batch file” already holds ~64 samples
+  num_workers: 4
+  max_epochs: 2
+  lr: 5e-6
+  weight_decay: 0.2
+  pacl_weight: 0.2            # weight for patch-alignment part of the loss
+  log_every_n_steps: 200      # mirrors CHECKPOINT.train_metrics_steps
+  save_every_n_steps: 10000   # mirrors CHECKPOINT.save_steps
+
+MODEL:
+  patch_alignment: true       # turn on patch-alignment behavior
+  initial_temperature: 0.07   # CLIP temperature
+  image_size: 224             # crops from 264x264
+  modality: "S2L1C"
+
+CHECKPOINT:
+  load_from_checkpoint:
+  experiment_name: "MS-CLIP_TinyDecoder"
+  save_path: "./results/models"
+  train_metrics_steps: 200
+  save_steps: 10000
+  project: "wildfire-forecast"
+  user: "louis-grosse-epfl"
+  group: FineTuneMSCLIP

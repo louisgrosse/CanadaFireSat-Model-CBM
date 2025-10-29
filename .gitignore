@@ -187,7 +187,10 @@ pyrightconfig.json
 
 # Model Outputs
 /results
-
+/wildfire-forecast
+/outputs
+/sae_features_mm
+/msclipFT
 # Pretrained Model
 /pretrained
 

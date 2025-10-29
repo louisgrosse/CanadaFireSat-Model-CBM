@@ -132,7 +132,7 @@ class SatImDataset(Dataset):
             # Load and filter test-* with file_id == "POS"
 
             print("Loading POS")
-            test_files = sorted(str(p) for p in data_dir.rglob("test-*.parquet"))
+            test_files = sorted(str(p) for p in data_dir.rglob("test_hard-*.parquet"))
             test_ds = HfDataset.from_parquet(test_files)
 
             print("Filtering POS")

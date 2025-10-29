@@ -10,6 +10,7 @@ MODEL:
   img_res: 224
   train_max_seq_len: 5
   val_max_seq_len: 5
+  test_max_seq_len: 5
   input_dim: 10
   patch_size: 16
   num_classes: 2
@@ -18,35 +19,33 @@ MODEL:
   ds_labels: true
   use_cls_fusion: false
   use_l1c2l2a_adapter: false
+  unfreeze_last_block: false
   pretrained: true
   l1c2l2a_Adapter_loc: "${paths.l1c2l2a_Adapter_loc}"
   out_H: 25
   out_W: 25
   temp_enc_type: "attention" 
   learned_query: false
-  freeze_msclip: false
-  unfreeze_last_block: false
+  freeze_msclip: true
   clearclip:
     enabled: false          
-    apply_to_last_n: 1     
+    n_last: 1
+    attn_variant: "qq"    
     keep_ffn: false        # should be false for ClearCLIP
     keep_residual: false   # should be false for ClearCLIP
-    use_self_self_attn: true    
-    ss_attn_iter: 1             
-    ss_attn_temp: null          
-    override_forward_for_dense: true
+
 
 SOLVER:
-  num_epochs: 30
+  num_epochs: 20
   num_warmup_epochs: 2
   loss_function: masked_dice_loss #combined_dice_ce or masked_dice_loss
   lr_scheduler: 'cosine'
-  lr_start: 1e-7
-  lr_min: 1e-7
+  lr_start: 1e-4
+  lr_min: 1e-4
   num_cycles: 1
-  lr_base: 1e-5
-  weight_decay: 0.01
-  accumulate_grad_batches: 1
+  lr_base: 5e-3
+  weight_decay: 0.1
+  accumulate_grad_batches: 2
 
 DATASETS:
   mode: "huggingface"
@@ -55,7 +54,7 @@ DATASETS:
     std_file: "${paths.bands_std}"
     with_loc: False
     with_doy: True
-    use_msclip_norm: false
+    use_msclip_norm: true
     bands: [
               "B2",
               "B3",
@@ -70,24 +69,25 @@ DATASETS:
           ]
   train:
     data_dir: "${paths.hf_data}"
-    batch_size: 12
+    batch_size: 24
     num_workers: 8
 
   eval:
     data_dir: "${paths.hf_data}"
-    batch_size: 12
+    batch_size: 24
     num_workers: 8
 
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "MS-CLIP_Fixed_FineTune"
+  experiment_name: "MS-CLIP_Fixed3"
   save_path: "./results/models"
   train_metrics_steps: 200 
   save_steps: 10000
   wandb_project: "${wandb.project}"
   wandb_user: "${wandb.user}"
+  group: V3
 
 SET-UP:
   seed: 42
-  local_device_ids: [0,1,2,3]
+  local_device_ids: [0]

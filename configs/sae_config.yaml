@@ -1,0 +1,143 @@
+defaults:
+  - _self_
+  - global_config
+
+DATA:
+  # Use your manifest paths
+  train_features: "/work/eceo/grosse/saeFeatures/train/features.npy"
+
+datamodule:
+  _target_: src.data.hf_Canada.sae_datamodule.SimpleActivationsDataModule
+  train_path:  /work/eceo/grosse/saeFeatures/train/features.npy
+  val_path:   /work/eceo/grosse/saeFeatures/validation/features.npy
+  test_path:  /work/eceo/grosse/saeFeatures/test/features.npy
+  batch_size: 1024
+  num_workers: 8
+  normalize: true
+  stats_path: ${paths.output_dir}/stats/activations_stats.npz  # supports .json or .npz
+
+model:
+  net:
+    _target_: src.models.msclip_factorize_model.MSClipFactorizeModel  # example path
+    pretrained: false
+
+trainer:
+  _target_: pytorch_lightning.Trainer
+
+  default_root_dir: ${paths.output_dir}
+
+  min_epochs: ${min_epochs}
+  max_epochs: ${max_epochs}
+  accumulate_grad_batches: 1 # set to 2 for 2x batch size, etc.
+
+  accelerator: gpu
+  devices: 1
+
+  # mixed precision for extra speed-up
+  # precision: 16
+
+  # set True to to ensure deterministic results
+  # makes training slower but gives more reproducibility than just setting seeds
+  deterministic: False
+
+trainer_sae:
+  _target_: pytorch_lightning.Trainer
+
+  default_root_dir: ${paths.output_dir}
+
+  min_epochs: ${sae_min_epochs} # prevents early stopping
+  max_epochs: ${sae_max_epochs}
+  gradient_clip_val: 1.
+
+  accelerator: gpu
+  devices: 1
+
+  # mixed precision for extra speed-up
+  # precision: 16
+
+  # set True to to ensure deterministic results
+  # makes training slower but gives more reproducibility than just setting seeds
+  deterministic: False
+
+sae:
+  _target_: src.models.sae.plSAE
+  sae_type: "topk"
+  loss_type: "mse_auxk"
+  optimizer_type: "adam"
+  lr: ${sae_lr}
+  num_samples: 4500000
+  # resample_steps: [300000, 600000, 900000, 1200000] # Rougly 1.2M steps
+  resample_every_n_epochs: 100 # Equvivalent to NO resampling
+  resample_batch_size: 256
+  bind_init: True
+  # depth_scale_shift: 2
+
+  sae_kwargs:
+    input_shape: ${input_shape}
+    nb_concepts : ${nb_concepts}
+    top_k: ${nb_k}
+    device: ${oc.select:device, "cpu"}
+
+# task name, determines output directory path
+task_name: "train-sae"
+
+min_epochs: 1 # NOT USED
+warmup_epochs: 10 # NOT USED
+max_epochs: 100 # NOT USED
+
+ds_path : ${oc.env:DATASET_PATH}
+ds_path_global : '' # Add Global dataset path 1 deg will complexify the rule-based search space
+
+# Activation Data
+mode_data: ""
+label_down: 20
+train_npy_path: "/home/louis/Code/wildfire-forecast/sae_features_mm/train/features.npy"
+val_npy_path: "/home/louis/Code/wildfire-forecast/sae_features_mm/validation/features.npy"
+test_npy_path: ""
+
+
+# SAE Arguments
+input_shape: 768
+nb_concepts: 3840   
+nb_k: 4 # See Analysis in Scaling ...
+sae_lr: 5e-4
+sae_batch_size: 256
+sae_min_epochs: 1
+sae_max_epochs: 10
+sae_ckpt_path: null
+
+tags: ["dev"]
+
+# set False to skip model training
+train: True
+
+# evaluate on test set, using best model weights achieved during training
+# lightning chooses best weights based on the metric specified in checkpoint callback
+test: True
+
+# simply provide checkpoint path to resume training
+ckpt_path: null
+
+# seed for random number generators in pytorch, numpy and python.random
+seed: 42
+
+_target_: src.model.sae_module.plSAE
+sae_type: "topk"
+loss_type: "mse_auxk"
+optimizer_type: "adam"
+lr: ${sae_lr}
+num_samples: 4500000
+# resample_steps: [300000, 600000, 900000, 1200000] # Rougly 1.2M steps
+resample_every_n_epochs: 100 # Equvivalent to NO resampling
+resample_batch_size: 256
+bind_init: True
+# depth_scale_shift: 2
+
+CHECKPOINT:
+  load_from_checkpoint:
+  experiment_name: "SAE_training_ALL"
+  save_path: "./results/models"
+  train_metrics_steps: 200 
+  save_steps: 10000
+  wandb_project: "${wandb.project}"
+  wandb_user: "${wandb.user}"

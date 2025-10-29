@@ -6,10 +6,15 @@ import sys
 from typing import Any, Dict
 
 from src.models.l1c2l2a_adapter import L1C2L2AAdapter
+#from src.CBM.concepts_minimal import _load_sae_from_ckpt
 
 sys.path.append('MS-CLIP')
 from msclip.inference.utils import build_model
 from msclip.inference.clearclip import maybe_patch_clearclip
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 
 class DOYEmbed(nn.Module):
@@ -74,16 +79,17 @@ class MSClipFactorizeModel(nn.Module):
         temp_enc_type="attention",
         freeze_msclip=True,
         use_doy=True,
-        ds_labels=False,
+        ds_labels=True,
         use_cls_fusion=False,
         image_size: int = 224,
         use_l1c2l2a_adapter: bool = False,
         l1c2l2a_dropout: int = 0,
         l1c2l2a_Adapter_loc:str = "",
-        unfreeze_last_block:bool = True,
+        unfreeze_last_block:bool = False,
         learned_query: bool = False,
         pretrained: bool = True,
         model_config: Dict[str, Any] = None,
+        sae_model_config: Dict[str, Any] = None,
         **kwargs,
         ):
         super().__init__()
@@ -101,9 +107,12 @@ class MSClipFactorizeModel(nn.Module):
             model_name=model_name, pretrained=pretrained, ckpt_path=ckpt_path, device="cpu", channels=channels
         )
         self.msclip_model   = msclip_model            
-        self.image_encoder  = msclip_model.image_encoder  
+        self.image_encoder  = msclip_model.image_encoder 
+
+        self.vision = self.msclip_model.clip_base_model.model.visual  
+        self.vision.output_tokens = True
         
-        if model_config is not None and "clearclip" in model_config:
+        if model_config is not None and "clearclip" in model_config and model_config["clearclip"]["enabled"]:
             num_patched = maybe_patch_clearclip(self.image_encoder, model_config["clearclip"])
             if num_patched > 0:
                 print(f"[ClearCLIP] Patched last {num_patched} vision blocks "
@@ -113,7 +122,7 @@ class MSClipFactorizeModel(nn.Module):
         if freeze_msclip:
             for p in self.msclip_model.parameters():
                 p.requires_grad = False
-
+            
             if unfreeze_last_block:
                 self._unfreeze_last_vit_blocks(n_blocks=1)
         else:
@@ -125,22 +134,18 @@ class MSClipFactorizeModel(nn.Module):
                 if any(n.startswith(prefix) for prefix in ["text_encoder.", "text_projection", "logit_scale", "text_transformer"]):
                     p.requires_grad = False
 
-        requires_enc_grad = any(p.requires_grad for p in self.image_encoder.parameters())
-        ctx = torch.enable_grad() if requires_enc_grad and self.training else torch.no_grad()
-        with ctx:
-            dummy = torch.zeros(1, channels, 224, 224)
-            patch_feats = self.image_encoder.get_patch_embeddings(dummy)  # [1, P, D]
-            _, num_patches, embed_dim = patch_feats.shape
-            self.embed_dim = embed_dim
-            self.H_patch = self.image_size // self.patch_size
-            self.W_patch = self.image_size // self.patch_size
+            for p in self.image_encoder.parameters():
+                p.requires_grad = True
 
-            if num_patches == (self.H_patch * self.W_patch + 1):
-                self.has_cls_token = True
-                self.num_patches = num_patches - 1
-            else:
-                self.has_cls_token = False
-                self.num_patches = num_patches
+            if hasattr(self.image_encoder.model.visual, "ln_post"):
+                for p in self.image_encoder.model.visual.ln_post.parameters():
+                    p.requires_grad = True
+
+        self.embed_dim = 768
+        self.H_patch = self.image_size // self.patch_size
+        self.W_patch = self.image_size // self.patch_size
+        self.num_patches = self.H_patch * self.W_patch
+        self.has_cls_token = True
 
         self.use_l1c2l2a_adapter = use_l1c2l2a_adapter
         self.l1c2l2a_dropout = l1c2l2a_dropout
@@ -162,6 +167,10 @@ class MSClipFactorizeModel(nn.Module):
         if self.use_cls_fusion and self.has_cls_token:
             self.cls_temp_enc = TemporalAttention(embed_dim=self.embed_dim, num_heads=4, dropout=0.1, learned_query=learned_query)
             self.cls_fuse_proj = nn.Linear(self.embed_dim, self.embed_dim)
+
+        #self.sae = _load_sae_from_ckpt(sae_ckpt, device='cpu')
+        #for p in self.sae.parameters():
+          #  p.requires_grad = False
 
         self.head = nn.Conv2d(self.embed_dim, num_classes, 1)
     
@@ -209,21 +218,11 @@ class MSClipFactorizeModel(nn.Module):
         requires_enc_grad = any(p.requires_grad for p in self.image_encoder.parameters())
         ctx = torch.enable_grad() if requires_enc_grad and self.training else torch.no_grad()
         with ctx:
-            feats = self.image_encoder.get_patch_embeddings(x)
-
-        if self.has_cls_token:
-            cls_feats = feats[:, 0, :]            # [B*T, D]
-            patch_feats = feats[:, 1:, :]         # [B*T, P, D]
-        else:
-            cls_feats, patch_feats = None, feats
+            #pooled_feats, patch_feats = self.msclip_model.clip_base_model.model.visual(x)       # pooled: [B, D], patch_tokens: [B*T, P, D]  [120, 512] and [120, 196, 768]
+            pooled_feats, patch_feats = self.msclip_model.image_encoder(x)       # pooled: [B, D], patch_tokens: [B*T, P, D]  [120, 512] and [120, 196, 768]
 
         # [B, T, P, D]
         patch_feats = patch_feats.view(B, T, self.num_patches, self.embed_dim)
-
-        if self.use_l1c2l2a_adapter:
-            patch_feats = self.l1c2l2a(patch_feats.view(B*T, self.num_patches, self.embed_dim)).view(
-                B, T, self.num_patches, self.embed_dim
-            )
 
         # (B*P, T, D)
         patch_feats = patch_feats.permute(0, 2, 1, 3).contiguous().view(B * self.num_patches, T, self.embed_dim)
@@ -251,8 +250,8 @@ class MSClipFactorizeModel(nn.Module):
         # [B, P, D]
         patch_feats = patch_feats.view(B, self.num_patches, self.embed_dim)
         if self.use_cls_fusion and self.has_cls_token:
-            cls_feats = cls_feats.view(B, T, self.embed_dim)
-            cls_feats = self.cls_temp_enc(cls_feats)
+            cls_feats = pooled_feats.view(B, T, self.embed_dim)      
+            cls_feats = self.cls_temp_enc(cls_feats)                   # [B, D]
             patch_feats = patch_feats + self.cls_fuse_proj(cls_feats).unsqueeze(1)
 
         # [B,D,H_p,W_p]

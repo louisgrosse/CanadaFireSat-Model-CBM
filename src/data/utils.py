@@ -9,7 +9,7 @@ import torch
 import torchvision.transforms as transforms
 from PIL import Image
 
-from src.constants import BANDS_10, BANDS_20, BANDS_60
+from src.constants import BANDS_10, BANDS_20, BANDS_60, MSCLIP_ORDER_10
 
 #from sen2chain import Tile
 
@@ -45,5 +45,6 @@ def extract_stats(stats_path: os.PathLike, bands: List[str]) -> np.ndarray:
         np.array([json_stats[band] for band in BANDS_60 if band in bands]).reshape(1, -1, 1, 1).astype(np.float32)
     )  # To be T * C * H * W
 
-    stats_array = np.concatenate([stats_array_10x, stats_array_20x, stats_array_60x], axis=1)
+    stats_array = np.concatenate([stats_array_10x, stats_array_20x], axis=1)[:, MSCLIP_ORDER_10]
     return stats_array
+

@@ -24,7 +24,7 @@ MODEL:
   out_H: 25
   out_W: 25
   temp_enc_type: "attention" 
-  learned_query: true
+  learned_query: false
   freeze_msclip: true
   clearclip:
     enabled: false          
@@ -37,15 +37,15 @@ MODEL:
     override_forward_for_dense: true
 
 SOLVER:
-  num_epochs: 30
+  num_epochs: 50
   num_warmup_epochs: 2
   loss_function: masked_dice_loss #combined_dice_ce or masked_dice_loss
   lr_scheduler: 'cosine'
-  lr_start: 1e-5
-  lr_min: 1e-6
+  lr_start: 1e-7
+  lr_min: 1e-7
   num_cycles: 1
-  lr_base: 1e-3
-  weight_decay: 0.1
+  lr_base: 5e-5
+  weight_decay: 0.01
   accumulate_grad_batches: 1
 
 DATASETS:
@@ -81,7 +81,7 @@ DATASETS:
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "MS-CLIP_Fixed_LearnedQuery"
+  experiment_name: "MS-CLIP_Fixed_NoNoise"
   save_path: "./results/models"
   train_metrics_steps: 200 
   save_steps: 10000

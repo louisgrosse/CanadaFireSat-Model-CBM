@@ -24,6 +24,97 @@ import sys
 sys.path.append('MS-CLIP')
 from msclip.inference.utils import build_model
 
+import torch
+import torch.nn.functional as F
+from collections import defaultdict
+
+@torch.no_grad()
+def compute_invariance_metrics(encoder, loader, mean_t, std_t, pool="token", max_batches=100, device=None):
+    """
+    Aggregates dataset-wide L1C vs L2A metrics:
+      - patch norms (mean±std per domain)
+      - cosine (mean±std,min,max) per token
+      - embedding MAE / MAX
+      - norm ratio stats
+      - reflectance out-of-range fractions (>1)
+    Assumes each batch yields (l1c, l2a) in reflectance space before MS-CLIP normalization.
+    """
+    device = device or next(encoder.parameters()).device
+    M = defaultdict(list)
+    seen = 0
+
+    def _norms(z):
+        # z: [B,T,C] or [B,C] if pooled
+        return z.norm(dim=-1).reshape(-1)
+
+    for l1c, l2a in loader:
+        if seen >= max_batches: break
+        seen += 1
+
+        # Move + normalize (clone to avoid aliasing)
+        l1c = ((l1c.to(device) - mean_t) / std_t).contiguous().clone()
+        l2a = ((l2a.to(device) - mean_t) / std_t).contiguous().clone()
+
+        # Reflectance out-of-range fractions (before norm reconstruction)
+        l1c_ref = l1c * std_t + mean_t
+        l2a_ref = l2a * std_t + mean_t
+        M["frac_gt1_l1c"].append((l1c_ref > 1).float().mean().item())
+        M["frac_gt1_l2a"].append((l2a_ref > 1).float().mean().item())
+
+        # Embeddings
+        z1 = encoder.get_patch_embeddings(l1c)
+        z2 = encoder.get_patch_embeddings(l2a)
+        if pool == "mean":
+            z1 = z1.mean(dim=1)  # [B,C]
+            z2 = z2.mean(dim=1)
+        # token path stays [B,T,C]
+
+        # Norms per domain
+        M["norm_l1c"].append(_norms(z1).mean().item())
+        M["norm_l2a"].append(_norms(z2).mean().item())
+
+        # Cosine per token
+        z1n = F.normalize(z1, dim=-1)
+        z2n = F.normalize(z2, dim=-1)
+        cos = (z1n * z2n).sum(dim=-1).reshape(-1)
+        M["cos_mean"].append(cos.mean().item())
+        M["cos_std"].append(cos.std().item())
+        M["cos_min"].append(cos.min().item())
+        M["cos_max"].append(cos.max().item())
+
+        # Embedding difference
+        diff = (z1 - z2).reshape(-1, z1.shape[-1]).abs()
+        M["mae"].append(diff.mean().item())
+        M["max"].append(diff.max().item())
+
+        # Norm ratio
+        r = (_norms(z1) / (_norms(z2) + 1e-8))
+        M["ratio_mean"].append(r.mean().item())
+        M["ratio_std"].append(r.std().item())
+        M["ratio_min"].append(r.min().item())
+        M["ratio_max"].append(r.max().item())
+
+    # Aggregate
+    agg = {k: (sum(v)/len(v) if len(v)>0 else float("nan")) for k,v in M.items()}
+    return agg
+
+def latex_invariance_table(agg, title="MS-CLIP L1C↔L2A invariance (dataset-wide)"):
+    def f(x, p=6): return f"{x:.{p}f}"
+    lines = []
+    lines += [r"\begin{table*}[t]", r"\centering", rf"\caption{{{title}}}", r"\label{tab:msclip_invariance_wide}",
+              r"\begin{tabular}{lccc}", r"\toprule",
+              r"\textbf{Metric} & \textbf{L1C} & \textbf{L2A} & \textbf{L1C vs L2A} \\",
+              r"\midrule"]
+    lines += [rf"Patch norm (mean) & {f(agg['norm_l1c'],3)} & {f(agg['norm_l2a'],3)} & -- \\"]
+    lines += [rf"Cosine (per token) & -- & -- & {f(agg['cos_mean'],6)} $\pm$ {f(agg['cos_std'],6)} "
+              rf"[min {f(agg['cos_min'],6)}, max {f(agg['cos_max'],6)}] \\"]
+    lines += [rf"Embedding diff (MAE / MAX) & -- & -- & {f(agg['mae'],6)} / {f(agg['max'],6)} \\"]
+    lines += [rf"Norm ratio $||z_{{L1C}}||/||z_{{L2A}}||$ & -- & -- & {f(agg['ratio_mean'],4)} "
+              rf"$\pm$ {f(agg['ratio_std'],4)} [min {f(agg['ratio_min'],4)}, max {f(agg['ratio_max'],4)}] \\"]
+    lines += [rf"Reflectance frac $>1$ & {f(agg['frac_gt1_l1c'],6)} & {f(agg['frac_gt1_l2a'],6)} & -- \\"]
+    lines += [r"\bottomrule", r"\end{tabular}", r"\end{table*}"]
+    return "\n".join(lines)
+
 
 class L1C2L2AAdapter(nn.Module):
     """Linear transform in CLIP embedding space (DxD)."""
@@ -190,11 +281,22 @@ def train_adapter_hydra(cfg: DictConfig):
     train_loader = DataLoader(train_ds, batch_size=cfg["DATASETS"]["train"]["batch_size"], collate_fn=collate, num_workers=cfg["DATASETS"]["train"]["num_workers"])
     val_loader = DataLoader(val_ds, batch_size=cfg["DATASETS"]["eval"]["batch_size"], collate_fn=collate, num_workers=cfg["DATASETS"]["eval"]["num_workers"])
 
-    adapter = train_adapter(cfg, encoder, adapter, train_loader, val_loader, device, wandb_logger)
+    # after you build encoder, loaders, mean_t, std_t
+    agg = compute_invariance_metrics(encoder, val_loader, mean_t, std_t, pool=model_cfg.get("pool","token"), max_batches=200)
+    tex = latex_invariance_table(agg, title="MS-CLIP L1C↔L2A invariance on WorldStrat (val)")
+    print("\n" + tex + "\n")
 
-    Path(cfg["CHECKPOINT"]["save_path"]).mkdir(parents=True, exist_ok=True)
-    out_ckpt = os.path.join(cfg["CHECKPOINT"]["save_path"], "l1c2l2a_linear.pt")
-    torch.save(adapter.state_dict(), out_ckpt)
+    # Optional: write to file
+    out_dir = Path(cfg["CHECKPOINT"]["save_path"]) / cfg["CHECKPOINT"]["experiment_name"]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "invariance_table.tex").write_text(tex)
+    print(f"Wrote LaTeX table to {out_dir/'invariance_table.tex'}")
+
+    #adapter = train_adapter(cfg, encoder, adapter, train_loader, val_loader, device, wandb_logger)
+
+    #Path(cfg["CHECKPOINT"]["save_path"]).mkdir(parents=True, exist_ok=True)
+    #out_ckpt = os.path.join(cfg["CHECKPOINT"]["save_path"], "l1c2l2a_linear.pt")
+    #torch.save(adapter.state_dict(), out_ckpt)
     print(f" Saved adapter to {out_ckpt}")
 
 
