@@ -1,27 +1,35 @@
 from typing import List, Optional, Dict, Any
 
+import pandas as pd
+from sklearn.cluster import MiniBatchKMeans
 import hydra
 from hydra.core.hydra_config import HydraConfig
 import pytorch_lightning as pl
 from omegaconf import DictConfig
 from pytorch_lightning import Callback, LightningDataModule, LightningModule, Trainer
+from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers.logger import Logger
+from overcomplete.sae.archetypal_dictionary import RelaxedArchetypalDictionary
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import Dataset
 import torch
 import torch.nn as nn
-from einops import rearrange
+import torch.nn.functional as F
 import os
 from torch.utils.data import DataLoader
 from pytorch_lightning.loggers import WandbLogger
 import logging
-import numpy as np, glob
-import sys
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
 from src.models.sae import plSAE
 from src.utils.process_utils import save_activations_to_npy, save_labels_to_npy
 import numpy as np
 from src.constants import CONFIG_PATH
+import sys
+
+sys.path.append('MS-CLIP')
+from msclip.inference.utils import build_model
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -32,18 +40,20 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
     Args:
         cfg (DictConfig): Configuration composed by Hydra.
     """
-
+    
     if not HydraConfig.initialized():
         HydraConfig.instance().clear()
         HydraConfig().set_config(cfg)
-    #hydra_run_dir = HydraConfig.get().run.dir
-    hydra_run_dir = cfg.paths.output_dir
+    hydra_run_dir = HydraConfig.get().run.dir
+    #hydra_run_dir = cfg.paths.output_dir
     #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     wandb_logger  = WandbLogger(
                 project=cfg["CHECKPOINT"]["wandb_project"],
                 entity=cfg["CHECKPOINT"]["wandb_user"],
                 name=cfg["CHECKPOINT"]["experiment_name"],
+                save_dir="/home/louis/Code/CanadaFireSat-Model-CBM/wandb/sae",
+                group=cfg["CHECKPOINT"]["group"]
             )
 
     try:
@@ -54,6 +64,8 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
     # set seed for random number generators in pytorch, numpy and python.random
     if cfg.get("seed"):
         pl.seed_everything(cfg.seed, workers=True)
+    
+    #wandb_logger.log_hyperparams(cfg)
 
     log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
@@ -61,8 +73,9 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
     log.info(f"Instantiating SAE <{cfg.sae._target_}>")
     sae: plSAE = hydra.utils.instantiate(cfg.sae)
 
-    log.info(f"Instantiating Backbone <{cfg.model.net._target_}>")
-    net: nn.Module = hydra.utils.instantiate(cfg.model.net)
+    #If someday we want to train the sae directly after computing the npy files.
+    #log.info(f"Instantiating Backbone <{cfg.model.net._target_}>")
+    #net: nn.Module = hydra.utils.instantiate(cfg.model.net)
 
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
     trainer: Trainer = hydra.utils.instantiate(cfg.trainer, logger=[wandb_logger])
@@ -77,8 +90,74 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
 
     act_datamodule = NpyActDataModule(batch_size=cfg.sae_batch_size, train_npy_path=cfg.datamodule["train_path"], val_npy_path=cfg.datamodule["train_path"], test_npy_path=cfg.datamodule["train_path"])
 
+    if cfg["use_archetypal"]["enabled"]:
+        if cfg["use_archetypal"]["uniform"]:
+            print("Using unisform sampling to sample points")
+            points = sample_points_uniform(dl = act_datamodule.train_dataloader(),n_points=32000)
+        else:
+            print("Using k-means to sample points")
+            points = sample_points_kmeans(dl = act_datamodule.train_dataloader(),n_centers=32_000)
+            
+        archetypal_dict = RelaxedArchetypalDictionary(
+            in_dimensions=cfg.sae.sae_kwargs["input_shape"],
+            nb_concepts=cfg.sae.sae_kwargs["nb_concepts"],
+            points=points,
+            delta=1.0,
+        )
+        sae.net.dictionary = archetypal_dict
+
     # Training the SAE
     trainer_sae.fit(model=sae, datamodule=act_datamodule, ckpt_path=cfg.get("sae_ckpt_path"))
+
+    align = cfg.get("ALIGN")
+    if align is not None and align.get("csv_phrases_path") and align["enabled"]:
+        device = str(align.get("device", "cuda"))
+        columns = ["dict", "mean", "std", "N", "max"]
+        data = []
+
+        for csv_name in align["csv_names"]:
+            df = pd.read_csv(str(align["csv_phrases_path"])+str(csv_name))
+            phrases = df["concept"].astype(str).tolist()
+
+            model_, _, tokenizer = build_model(
+                model_name=align["msclip_model_name"],
+                pretrained=bool(align.get("pretrained", True)),
+                ckpt_path=align.get("msclip_ckpt"),
+                device=device,
+                channels=10,  
+            )
+            msclip = model_.eval().to(device)
+
+            text_embs = _encode_phrases_msclip(
+                phrases=phrases,
+                model=msclip,
+                tokenizer=tokenizer,
+                batch_size=int(align.get("text_batch_size", 512)),
+                device=device,
+            )  # [N, Dt]
+
+            vp = msclip.clip_base_model.model.visual.proj
+
+            mean_c, std_c, max_c = _compute_alignment_stats(
+                sae_module=sae,
+                text_embs=text_embs,
+                vision_proj=vp,
+                device=device,
+            )
+
+            max_v = float(max_c)
+            mean = float(mean_c)
+            std  = float(std_c)
+
+            data.append([csv_name, mean, std, len(phrases),max_v])
+
+            print(f"[ALIGN] top1 cosine — mean={mean_c:.4f}, std={std_c:.4f} {csv_name}")
+
+        wandb_logger.log_table(key="alignment", columns=columns, data=data)
+
+
+    ckpt_dir = callbacks_cfg[0]["dirpath"]
+    OmegaConf.save(cfg, os.path.join(ckpt_dir, "config.yaml"))
 
     # Test the SAE
     trainer_sae.test(
@@ -86,7 +165,80 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
     datamodule=act_datamodule,
     ckpt_path="best"
 )
-    
+
+
+def sample_points_uniform(n_points=32000, dl =None, cap_tokens_per_batch=4096, device="cpu"):
+
+    points = []
+    with torch.no_grad():
+        for batch in dl:
+
+            x = batch["inputs"]  
+            B, D, H, W = x.shape
+            x = x.permute(0, 2, 3, 1).contiguous().view(B * H * W, D)   # [B*H*W, D]    
+
+            x = x.float()
+            #x = (x - x.mean(dim=0, keepdim=True)) / (x.std(dim=0, unbiased=False, keepdim=True) + 1e-6) 
+
+            if x.shape[0] > cap_tokens_per_batch:
+                idx = torch.randperm(x.shape[0])[:cap_tokens_per_batch]
+                x = x[idx]
+
+            points.append(x.cpu())
+            if sum(p.shape[0] for p in points) >= n_points:
+                break
+
+    points = torch.cat(points, dim=0)
+    if points.shape[0] > n_points:
+        idx = torch.randperm(points.shape[0])[:n_points]
+        points = points[idx]
+    return points.to(device)
+
+@torch.no_grad()
+def sample_points_kmeans(dl=None, n_centers=32_000, cap_tokens_per_batch=8192):
+    kmeans = MiniBatchKMeans(
+        n_clusters=n_centers,
+        batch_size=cap_tokens_per_batch,
+        init="k-means++",
+        n_init=1,
+    )
+
+    init_needed = n_centers
+    init_chunks = []
+
+    def prep_tokens(x):
+        B, D, H, W = x.shape
+
+        x = x.permute(0, 2, 3, 1).contiguous().view(B * H * W, D).float()
+        if x.shape[0] > cap_tokens_per_batch:
+            idx = torch.randperm(x.shape[0])[:cap_tokens_per_batch]
+            x = x[idx]
+        return x.cpu().numpy()
+
+    for batch in dl:
+        x = batch["inputs"]
+        arr = prep_tokens(x)
+        if init_needed > 0:
+            take = min(init_needed, arr.shape[0])
+            init_chunks.append(arr[:take])
+            init_needed -= take
+            if init_needed == 0:
+                init_buf = np.concatenate(init_chunks, axis=0)  # [n_centers, D]
+                kmeans.partial_fit(init_buf)
+                break
+    else:
+        raise ValueError(f"Only collected {n_centers - init_needed} samples < n_centers={n_centers}. "
+                         f"Lower n_centers or raise cap_tokens_per_batch.")
+
+    for batch in dl:
+        x = batch["inputs"]
+        arr = prep_tokens(x)
+        kmeans.partial_fit(arr)
+
+    centers = torch.from_numpy(kmeans.cluster_centers_).float()  # [n_centers, D]
+    return centers
+
+
 
 class NpyActDataModule(LightningDataModule):
     def __init__(self, batch_size: int, train_npy_path: str,
@@ -116,15 +268,45 @@ class NpyActDataModule(LightningDataModule):
         else:
             return []
 
+@torch.no_grad()
+def _encode_phrases_msclip(phrases, model, tokenizer, batch_size, device):
+    embs = []
+    for i in range(0, len(phrases), batch_size):
+        toks = tokenizer(phrases[i:i+batch_size]).to(device)
+        z = model.inference_text(toks)          # [B, Dt]
+        embs.append(F.normalize(z, dim=-1))
+    return torch.cat(embs, dim=0)               # [N, Dt]
+
+@torch.no_grad()
+def _compute_alignment_stats(sae_module, text_embs, vision_proj, device: str):
+    D = sae_module.net.get_dictionary().to(device).float()   # [C, Dv]  :contentReference[oaicite:2]{index=2}
+
+    # 3) Normalize and cosine sims
+    D = F.normalize(D, dim=1)                                # [C, Dt]
+    T = F.normalize(text_embs.to(device).float(), dim=1)     # [N, Dt]
+    sims = D @ T.t()                                         # [C, N]
+
+    # 4) Top-1 cosine per concept → mean/std
+    top1 = sims.max(dim=1).values                            # [C]
+    return top1.mean().item(), top1.std(unbiased=False).item(), top1.max().item()
+
+
 class NpyActivationDataset(Dataset):
     def __init__(self, npy_path):
         self.data = np.load(npy_path, mmap_mode='r')
+        lbl_path = npy_path.replace("features.npy", "labels.npy")                  
+        self.labels = np.load(lbl_path, mmap_mode='r') if os.path.exists(lbl_path) else None  
 
     def __len__(self):
         return self.data.shape[0]
 
     def __getitem__(self, idx):
-        return torch.from_numpy(self.data[idx].copy())
+        x = torch.from_numpy(self.data[idx].copy())
+        if self.labels is None:    
+            return {"inputs": x} 
+        y = torch.from_numpy(self.labels[idx].astype(np.uint8).copy())                        
+        return {"inputs": x, "label": y}  
+
 
 @hydra.main(version_base="1.2", config_path=str(CONFIG_PATH), config_name="sae_config.yaml")
 def main(cfg: DictConfig) -> Optional[float]:

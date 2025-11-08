@@ -56,6 +56,8 @@ def criterion_factory(loss_type: str, **criterion_kwargs) -> Callable[[torch.Ten
         return partial(mse_dyn_th_criterion, **criterion_kwargs)
     elif loss_type == "mse_auxk":
         return partial(top_k_auxiliary_loss, **criterion_kwargs)
+    elif loss_type == "mse_reanim":
+        return partial(mse_reanim_criterion, **criterion_kwargs)
     else:
         raise NotImplementedError
 

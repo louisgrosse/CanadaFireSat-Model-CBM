@@ -53,7 +53,7 @@ class TemporalAttention(nn.Module):
             q_in = k_in = x
 
         attn_out, _ = self.attn(q_in, k_in, x) 
-        x = self.norm(attn_out + x)
+        x = self.norm(attn_out + x) 
 
         if self.learned_query:
             BPT, T, D = x.shape
@@ -137,11 +137,8 @@ class MSClipFactorizeModel(nn.Module):
             for p in self.image_encoder.parameters():
                 p.requires_grad = True
 
-            if hasattr(self.image_encoder.model.visual, "ln_post"):
-                for p in self.image_encoder.model.visual.ln_post.parameters():
-                    p.requires_grad = True
 
-        self.embed_dim = 768
+        self.embed_dim = 512
         self.H_patch = self.image_size // self.patch_size
         self.W_patch = self.image_size // self.patch_size
         self.num_patches = self.H_patch * self.W_patch
@@ -166,7 +163,6 @@ class MSClipFactorizeModel(nn.Module):
 
         if self.use_cls_fusion and self.has_cls_token:
             self.cls_temp_enc = TemporalAttention(embed_dim=self.embed_dim, num_heads=4, dropout=0.1, learned_query=learned_query)
-            self.cls_fuse_proj = nn.Linear(self.embed_dim, self.embed_dim)
 
         #self.sae = _load_sae_from_ckpt(sae_ckpt, device='cpu')
         #for p in self.sae.parameters():
@@ -220,6 +216,8 @@ class MSClipFactorizeModel(nn.Module):
         with ctx:
             #pooled_feats, patch_feats = self.msclip_model.clip_base_model.model.visual(x)       # pooled: [B, D], patch_tokens: [B*T, P, D]  [120, 512] and [120, 196, 768]
             pooled_feats, patch_feats = self.msclip_model.image_encoder(x)       # pooled: [B, D], patch_tokens: [B*T, P, D]  [120, 512] and [120, 196, 768]
+            patch_feats = self.vision.ln_post(patch_feats)      # [B*T, P, 768] -> LN
+            patch_feats = patch_feats @ self.vision.proj
 
         # [B, T, P, D]
         patch_feats = patch_feats.view(B, T, self.num_patches, self.embed_dim)
@@ -252,7 +250,7 @@ class MSClipFactorizeModel(nn.Module):
         if self.use_cls_fusion and self.has_cls_token:
             cls_feats = pooled_feats.view(B, T, self.embed_dim)      
             cls_feats = self.cls_temp_enc(cls_feats)                   # [B, D]
-            patch_feats = patch_feats + self.cls_fuse_proj(cls_feats).unsqueeze(1)
+            patch_feats = patch_feats + cls_feats.view(B,1,self.embed_dim)
 
         # [B,D,H_p,W_p]
         patch_feats = patch_feats.view(B, self.H_patch, self.W_patch, self.embed_dim).permute(0, 3, 1, 2).contiguous()

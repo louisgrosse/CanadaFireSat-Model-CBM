@@ -92,7 +92,7 @@ sae:
   resample_every_n_epochs: 100 # Equvivalent to NO resampling
   resample_batch_size: 256
   bind_init: True
-  decay_k: True
+  decay_k: False
   # depth_scale_shift: 2
   #criterion_kwargs:
     #penalty: 0.1               
@@ -101,7 +101,7 @@ sae:
     input_shape: ${input_shape}
     nb_concepts : ${nb_concepts}
     top_k: ${nb_k}
-    #threshold_momentum: 0.2
+    #threshold_momentum: 0.8
     device: ${oc.select:device, "cpu"}
 
 
@@ -132,12 +132,12 @@ ALIGN:
   
 # SAE Arguments
 use_archetypal: 
-  enabled: false  #Turn off bind init if you use this
+  enabled: true  #Turn off bind init if you use this
   uniform: false
 
 input_shape: 512
-nb_concepts: 4096
-nb_k: 64 # See Analysis in Scaling ...
+nb_concepts: 8192
+nb_k: 8 # See Analysis in Scaling ...
 sae_lr: 5e-5
 sae_batch_size: 256
 sae_min_epochs: 1
@@ -161,7 +161,7 @@ seed: 42
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "SAE_k64_4096_decay4"
+  experiment_name: "SAE_k8_8192_archetypal"
   save_path: "./results/topk_overcomplete_runs"
   train_metrics_steps: 200 
   save_steps: 10000

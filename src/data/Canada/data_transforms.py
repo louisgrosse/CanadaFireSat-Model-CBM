@@ -39,7 +39,6 @@ from src.data.augmentations import (
     ToTHWC,
     ToTensorMSCLIP,
     NormalizeMSCLIP,
-    ToTCHW_MSCLIP,
     ReorderBands,
     band_order_probe,
     DebugTapOnce,
@@ -57,6 +56,13 @@ MSCLIP_MEANS = [925.161, 1183.128, 1338.041, 1667.254,
 MSCLIP_STDS  = [1205.586, 1223.713, 1399.638, 1403.298,
                 1378.513, 1434.924, 1491.141, 1454.089,
                 1473.248, 1365.08]
+
+S2L1C_MEAN = [2607.345, 2393.068, 2320.225, 2373.963, 2562.536, 3110.071, 3392.832, 3321.154, 3583.77, 1838.712, 1021.753, 3205.112, 2545.798]
+S2L1C_STD = [786.523, 849.702, 875.318, 1143.578, 1126.248, 1161.98, 1273.505, 1246.79, 1342.755, 576.795, 45.626, 1340.347, 1145.036]
+
+S2L2A_MEAN = [1793.243, 1924.863, 2184.553, 2340.936, 2671.402, 3240.082, 3468.412, 3563.244, 3627.704, 3711.071, 3416.714, 2849.625]
+S2L2A_STD = [1160.144, 1201.092, 1219.943, 1397.225, 1400.035, 1373.136, 1429.17, 1485.025, 1447.836, 1652.703, 1471.002, 1365.307]
+
 
 from functools import partial
 
@@ -190,10 +196,8 @@ def Canada_segmentation_transform(
         
         img_transform_list.append(CutOrPad(max_seq_len=model_config["train_max_seq_len"], sampling_type="random"))
         img_transform_list.append(UnkMask(unk_class=-999, ground_truth_target="labels"))
-        if use_msclip_norm:
-            img_transform_list.append(ToTCHW_MSCLIP())
-        else:
-            img_transform_list.append(ToTHWC())
+
+        img_transform_list.append(ToTHWC())
 
     else:
         if ds_labels:
@@ -247,10 +251,8 @@ def Canada_segmentation_transform(
             )
 
         img_transform_list.append(UnkMask(unk_class=-999, ground_truth_target="labels"))
-        if use_msclip_norm:
-            img_transform_list.append(ToTCHW_MSCLIP())
-        else:
-            img_transform_list.append(ToTHWC())
+
+        img_transform_list.append(ToTHWC())
 
     total_transform_list = band_transform_list + img_transform_list
 

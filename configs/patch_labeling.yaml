@@ -2,6 +2,31 @@ defaults:
   - _self_
   - global_config
 
+ckpt_path: ""
+device: cuda
+# Data
+bands_mean: "/work/eceo/CanadaFireSat/metadata/bands_mean.json"
+bands_std: "/work/eceo/CanadaFireSat/metadata/bands_std.json"
+data_dir: "/work/eceo/CanadaFireSat"
+split: "validation"                  # "train" | "validation" | "test" | "test_hard"
+
+# Dictionary
+captions_dir: "/work/eceo/grosse/dictionnary/"
+captions_glob: "concept_counts10k_spacy.csv"  # "*.parquet" or "*.csv"
+max_phrases:  #50000, None to take all, 
+text_batch_size: 512
+# Visualization
+rgb_bands: [2,1,0]  # (B4,B3,B2)-like indices in MS-CLIP 10-band order
+n_show_batches: 4                  # how many batches to visualize
+topk_words_plot: 8
+seed: 42
+# Output
+out_dir: "results/dictionnary/patch_naming_hf_clip"
+
+sae:
+  load_from_ckpt: 
+  npy_train_path: 
+
 MODEL:
   architecture: "MSClipFacto"
   msclip_model_name: "Llama3-MS-CLIP-Base"
@@ -16,35 +41,36 @@ MODEL:
   num_classes: 2
   channels: 10
   threshold: 0.5
+  pretrained: True
+  use_cls_fusion: false
   ds_labels: true
-  use_cls_fusion: true
   use_l1c2l2a_adapter: false
   unfreeze_last_block: false
-  pretrained: true
   l1c2l2a_Adapter_loc: "${paths.l1c2l2a_Adapter_loc}"
   out_H: 25
   out_W: 25
   temp_enc_type: "attention" 
-  learned_query: false
+  temp_depth: 2
+  use_conv_decoder: true
   freeze_msclip: true
+  learned_query: true
   clearclip:
-    enabled: false          
+    enabled: true          
     n_last: 1
-    attn_variant: "qq"    
+    attn_variant: "qq"   
     keep_ffn: false        # should be false for ClearCLIP
     keep_residual: false   # should be false for ClearCLIP
 
-
 SOLVER:
-  num_epochs: 20
+  num_epochs: 30
   num_warmup_epochs: 2
   loss_function: masked_dice_loss #combined_dice_ce or masked_dice_loss
   lr_scheduler: 'cosine'
-  lr_start: 1e-5
-  lr_min: 1e-5
+  lr_start: 1e-7
+  lr_min: 1e-7
   num_cycles: 1
-  lr_base: 5e-3
-  weight_decay: 0.1
+  lr_base: 5e-5
+  weight_decay: 0.01
   accumulate_grad_batches: 2
 
 DATASETS:
@@ -54,7 +80,7 @@ DATASETS:
     std_file: "${paths.bands_std}"
     with_loc: False
     with_doy: True
-    use_msclip_norm: true
+    use_msclip_norm: True
     bands: [
               "B2",
               "B3",
@@ -80,13 +106,13 @@ DATASETS:
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "MS-CLIP_clsfusion"
+  experiment_name: "MS-ClearCLIP_Fixed3"
   save_path: "./results/models"
   train_metrics_steps: 200 
   save_steps: 10000
   wandb_project: "${wandb.project}"
   wandb_user: "${wandb.user}"
-  group: V3
+  group: Trained on Ontario and Alberta
 
 SET-UP:
   seed: 42

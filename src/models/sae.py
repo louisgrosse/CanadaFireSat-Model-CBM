@@ -10,6 +10,7 @@ from overcomplete.sae import TopKSAE, JumpSAE, BatchTopKSAE, SAE
 from overcomplete.sae.train import extract_input, _compute_reconstruction_error
 from overcomplete.sae.trackers import DeadCodeTracker
 from overcomplete.metrics import l0_eps, avg_l2_loss, hoyer
+from overcomplete.sae.archetypal_dictionary import RelaxedArchetypalDictionary
 
 
 from src.utils.sae_utils import criterion_factory, optimizer_factory, scheduler_factory, mse_criterion,\
@@ -32,6 +33,8 @@ class plSAE(pl.LightningModule):
             bind_init: bool = False,
             depth_scale_shift: int = 0,
             geo_embed_dim: int = 256,
+            bias_fire: bool = False,
+            decay_k: bool= False,
             sae_kwargs: Dict[str, Any] = {},
             criterion_kwargs: Dict[str, Any] = {},
     ):
@@ -39,25 +42,8 @@ class plSAE(pl.LightningModule):
         self.save_hyperparameters(logger=False)
         self.net = self.sae_factory(sae_type, **sae_kwargs)
         self.criterion = criterion_factory(loss_type, **criterion_kwargs)
-
-        if depth_scale_shift > 0:
-            self.geonet = nn.ModuleList()
-            self.geonet.append(nn.Linear(4, geo_embed_dim)) # Apply Sin / Cos -> 4
-            self.geonet.append(nn.GELU())
-            self.geonet.append(nn.LayerNorm(geo_embed_dim))
-            for _ in range(depth_scale_shift - 1):
-                self.geonet.append(nn.Linear(geo_embed_dim, geo_embed_dim))
-                self.geonet.append(nn.GELU())
-                self.geonet.append(nn.LayerNorm(geo_embed_dim))
-            
-            out_layer = nn.Linear(geo_embed_dim, 2*self.net.dictionary.in_dimensions)
-            nn.init.zeros_(out_layer.bias)
-            nn.init.xavier_uniform_(out_layer.weight, gain=0.01)
-            self.geonet.append(out_layer) # scale & shift
-            self.geonet = nn.Sequential(*self.geonet)
-
-        else:
-            self.geonet = None
+        
+        self.geonet = None
 
         self.train_dead_tracker = None
         self.val_dead_tracker = None
@@ -72,10 +58,10 @@ class plSAE(pl.LightningModule):
         self._test_outputs = []
 
     @staticmethod
-    def sae_factory(sae_type: str, **sae_kwargs) -> nn.Module:
+    def sae_factory(sae_type: str,use_relaxed_dict: bool = False, **sae_kwargs) -> nn.Module:
 
         if sae_type == "topk":
-            print("Using topk sae")
+            print("Using topk sae")            
             return TopKSAE(**sae_kwargs)
         elif sae_type == "jump":
             return JumpSAE(**sae_kwargs)
@@ -85,7 +71,7 @@ class plSAE(pl.LightningModule):
             return SAE(**sae_kwargs)
         else:
             raise NotImplementedError
-
+    
     def forward(self, x: torch.Tensor):
         return self.net(x)
 
@@ -97,7 +83,7 @@ class plSAE(pl.LightningModule):
         return xpos
 
     def step(self, batch: Any, tracker: Any, flag_mse: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        x = extract_input(batch)
+        x = batch["inputs"]
 
         B, D, H, W = x.shape
 
@@ -105,13 +91,23 @@ class plSAE(pl.LightningModule):
 
         x = x.float()
         
-        x = (x - x.mean(dim=0, keepdim=True)) / (x.std(dim=0, unbiased=False, keepdim=True) + 1e-6)
+        #x = (x - x.mean(dim=0, keepdim=True)) / (x.std(dim=0, unbiased=False, keepdim=True) + 1e-6)
 
         x = x.to(device=self.device, dtype=self.net.encoder.final_block[0].weight.dtype, non_blocking=True)
         
         z_pre, z, x_hat = self.net(x)
         loss = self.criterion(x, x_hat, z_pre, z, self.net.get_dictionary())
 
+        if self.hparams.bias_fire:
+            print("==============> bias fire")
+            m = None
+            lbl = batch["label"]
+            lbl = lbl.squeeze(1) if lbl.ndim==4 else lbl
+            m = (lbl.reshape(-1) > 0).to(x.device)
+
+            pos_mse = (x[m] - x_hat[m]).square().mean()
+            loss = 0.7 * pos_mse + 0.3 * loss            # weight toward positives
+            
         if tracker is None:
             tracker = DeadCodeTracker(z.shape[1], self.device)
         tracker.update(z)
@@ -134,6 +130,11 @@ class plSAE(pl.LightningModule):
             self._resample_dead_codes()
             self.net.train()
             self.log("train/resampled_codes", 1, prog_bar=True)
+
+        if self.hparams.decay_k:
+            start_K, end_K, T = 64, 4, 15  # decay to 4 over 15 epochs
+            K = max(end_K, start_K - (self.current_epoch * (start_K-end_K)//T))
+            self.net.top_k = int(K)
 
         self.train_dead_tracker = None
         self.train_dead_tracker = DeadCodeTracker(self.net.get_dictionary().shape[0], self.device)
@@ -158,7 +159,14 @@ class plSAE(pl.LightningModule):
         self.val_dead_tracker = DeadCodeTracker(self.net.get_dictionary().shape[0], self.device)
 
     def validation_step(self, batch: Any, batch_idx: int) -> Dict[str, torch.Tensor]:
+        
         loss, _, codes, inputs, rec_inputs, (mse, region_mse) = self.step(batch, tracker=self.val_dead_tracker, flag_mse=True)
+        if isinstance(batch, dict) and ("label" in batch):
+            lbl = batch["label"]
+            if lbl.ndim == 4: lbl = lbl.squeeze(1)
+            m = (lbl.reshape(-1) > 0).to(inputs.device)
+            if m.any(): self.log("val/r2_fire", _compute_reconstruction_error(inputs[m], rec_inputs[m]),
+                                on_step=False, on_epoch=True, prog_bar=True)
         sparsity_error = l0_eps(codes, 0).sum().item()
         hoyer_error = hoyer(codes).mean().item()
         self.log("val/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
@@ -191,8 +199,15 @@ class plSAE(pl.LightningModule):
     def on_test_epoch_start(self):
         self.test_dead_tracker = DeadCodeTracker(self.net.get_dictionary().shape[0], self.device)
 
-    def test_step(self, batch: Any, batch_idx: int) -> Dict[str, torch.Tensor]:
+    def test_step(self, batch: Any, batch_idx: int) -> Dict[str, torch.Tensor]:        
+
         loss, _, codes, inputs, rec_inputs, (mse, region_mse) = self.step(batch, tracker=self.test_dead_tracker, flag_mse=True)
+        if isinstance(batch, dict) and ("label" in batch):
+            lbl = batch["label"]
+            if lbl.ndim == 4: lbl = lbl.squeeze(1)
+            m = (lbl.reshape(-1) > 0).to(inputs.device)
+            if m.any(): self.log("test/r2_fire", _compute_reconstruction_error(inputs[m], rec_inputs[m]),
+                                on_step=False, on_epoch=True, prog_bar=True)
         sparsity_error = l0_eps(codes, 0).sum().item()
         hoyer_error = hoyer(codes).mean().item()
         self.log("test/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
@@ -225,8 +240,9 @@ class plSAE(pl.LightningModule):
 
     @torch.no_grad()
     def _resample_dead_codes(self):
-        """Implements resampling of dead codes from
-        https://transformer-circuits.pub/2023/monosemantic-features/index.html#appendix-autoencoder-resampling"""
+        """Resample dead codes using high-reconstruction-error tokens.
+        Based on Appendix E.3 of transformer-circuits SAE work, adapted to our tensor shapes.
+        """
 
         if self.geonet is not None:
             raise NotImplementedError("Resampling not implemented for Geo-Conditioned SAE")
@@ -237,45 +253,82 @@ class plSAE(pl.LightningModule):
 
         dataset = self.trainer.train_dataloader.dataset
 
-        sampled_indices = random.sample(range(len(dataset)), self.hparams.num_samples)
+        num_samples = min(self.hparams.num_samples, len(dataset))
+
+        sampled_indices = random.sample(range(len(dataset)), num_samples)
         subset = Subset(dataset, sampled_indices)
-        subset_dataloader = DataLoader(subset, batch_size=self.hparams.resample_batch_size, shuffle=False)
+
+        subset_dataloader = DataLoader(
+            subset,
+            batch_size=self.hparams.resample_batch_size,
+            shuffle=False,
+        )
 
         mse_loss = criterion_factory(loss_type="mse", aggregate_batch=False)
 
-        tot_indices = []
-        tot_loss = []
-        for i, batch in enumerate(subset_dataloader):
-            x = extract_input(batch)
-            x = x.to(self.device)
-            z_pre, z, x_hat = self.net(x)
-            loss = mse_loss(x, x_hat, z_pre, z, self.net.get_dictionary())
+        all_losses = []
+        all_tokens = []
 
-            start = i * self.hparams.resample_batch_size
-            end = start + loss.shape[0]
+        for batch in subset_dataloader:
+            x = batch["inputs"]
 
-            tot_indices.extend(sampled_indices[start:end])
-            tot_loss.append(loss.pow(2).detach().cpu())
+            B, D, H, W = x.shape
 
-        tot_loss = torch.cat(tot_loss, dim=0)
-        tot_probs = tot_loss / tot_loss.sum()
+            x_flat = x.permute(0, 2, 3, 1).contiguous().view(B * H * W, D)
 
-        chosen_indices= torch.multinomial(tot_probs, num_samples=len(dead_indices), replacement=False)
-        chosen_dataset_indices = [tot_indices[i] for i in chosen_indices]
-        for dead_idx, chosen_idx in zip(dead_indices, chosen_dataset_indices):
-            raw_input = dataset[chosen_idx]
-            sampled_input = extract_input(raw_input).to(self.device)
-            sampled_input = sampled_input / sampled_input.norm(p=2)
-            self.net.dictionary._weights[dead_idx, :] = sampled_input # Based on Overcomplete Framework
-            alive_norm = self.net.encoder.final_block[0].weight[self.train_dead_tracker.alive_features, :].norm(dim=1) # Dimension should be n_concept, last_dimension
+            x_flat = x_flat.float()
+            #x_flat = (x_flat - x_flat.mean(dim=0, keepdim=True)) / (
+            #    x_flat.std(dim=0, unbiased=False, keepdim=True) + 1e-6
+            #)
+            x_flat = x_flat.to(
+                device=self.device,
+                dtype=self.net.encoder.final_block[0].weight.dtype,
+                non_blocking=True,
+            )
+
+            z_pre, z, x_hat = self.net(x_flat)
+
+            loss_vec = mse_loss(
+                x_flat, x_hat, z_pre, z, self.net.get_dictionary()
+            ) 
+
+            all_losses.append(loss_vec.pow(2).detach().cpu())
+            all_tokens.append(x_flat.detach().cpu())
+
+        all_losses = torch.cat(all_losses, dim=0)          # [N_tokens]
+        all_tokens = torch.cat(all_tokens, dim=0)          # [N_tokens, D]
+
+        probs = all_losses / (all_losses.sum() + 1e-8)
+
+        num_dead = len(dead_indices)
+        need_replacement = num_dead > all_tokens.shape[0]
+
+        chosen_token_ids = torch.multinomial(
+            probs,
+            num_samples=num_dead,
+            replacement=need_replacement,
+        )
+
+        for dead_idx, chosen_id in zip(dead_indices, chosen_token_ids):
+            sampled_input = all_tokens[chosen_id].to(self.device)
+
+            sampled_input = sampled_input / (sampled_input.norm(p=2) + 1e-8)
+
+            self.net.dictionary._weights[dead_idx, :] = sampled_input
+
+            alive_norm = self.net.encoder.final_block[0].weight[
+                self.train_dead_tracker.alive_features, :
+            ].norm(dim=1)
             mean_alive_norm = alive_norm.mean()
             target_norm = mean_alive_norm * 0.2
-            self.net.encoder.final_block[0].weight[dead_idx, :] = sampled_input * target_norm
-            self.net.encoder.final_block[0].bias[dead_idx] = 0.
+
+            self.net.encoder.final_block[0].weight[dead_idx, :] = (
+                sampled_input * target_norm
+            )
+            self.net.encoder.final_block[0].bias[dead_idx] = 0.0
 
             optimizer = self.optimizers()
             if isinstance(optimizer, torch.optim.Adam):
-                # Handle encoder weight row
                 enc_weight_param = self.net.encoder.final_block[0].weight
                 enc_bias_param = self.net.encoder.final_block[0].bias
                 dec_weight_param = self.net.dictionary._weights
@@ -293,6 +346,7 @@ class plSAE(pl.LightningModule):
                             state["exp_avg_sq"][index].zero_()
             else:
                 raise NotImplementedError("Specify reset for other optimizer types")
+
 
 
     @torch.no_grad()

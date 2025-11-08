@@ -47,9 +47,6 @@ def evaluate(cfg: DictConfig):
             model.model.out_H = cfg["MODEL"]["out_H"]
             model.model.out_W = cfg["MODEL"]["out_W"]
 
-        if "ViT" in model.model_type:
-            if model.model.features.patch_embed.img_size != (cfg["MODEL"]["img_res"], cfg["MODEL"]["img_res"]):
-                model.model.features.patch_embed.img_size = (cfg["MODEL"]["img_res"], cfg["MODEL"]["img_res"])
     else:
         try:
             model = TabModule.load_from_checkpoint(cfg["model_path"])
@@ -139,7 +136,7 @@ def evaluate(cfg: DictConfig):
             if cfg["mode"] == "image":
                 sample = data[0]
                 img_name_info = data[1]
-                if model.model_type == 'MSclipFacto':
+                if model.model_type == 'MSClipFacto':
                     logits = model(sample["inputs"].unsqueeze(0).to(device),sample["doy"].unsqueeze(0).to(device))
                 else:
                     logits = model(sample["inputs"].unsqueeze(0).to(device))

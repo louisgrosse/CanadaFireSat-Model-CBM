@@ -644,30 +644,6 @@ class ReorderBands(object):
         return sample
 
 
-class ToTCHW_MSCLIP(object):
-    """
-    Ensure inputs are [T, C, H, W] (channels-first per timestep).
-    If inputs are [T, H, W, C] or [B, T, H, W, C], permute them.
-    """
-    def __call__(self, sample):
-        x = sample["inputs"]
-
-        if x.ndim == 4: 
-            if x.shape[1] in (224, 256): 
-                x = x.permute(0, 3, 1, 2).contiguous()  # [T,H,W,C] → [T,C,H,W]
-
-        elif x.ndim == 5:  
-            if x.shape[2] in (224, 256): 
-                x = x.permute(0, 1, 4, 2, 3).contiguous()  # [B,T,H,W,C] → [B,T,C,H,W]
-
-
-        else:
-            raise ValueError(f"Unexpected input shape {x.shape}")
-
-        sample["inputs"] = x
-        return sample
-
-
 class ToTHWC(object):
     """
     Convert Tensors to THWC.

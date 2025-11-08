@@ -34,9 +34,9 @@ safe_snapshot(
     repo_type="dataset",
     local_dir=str(DST),
     allow_patterns=[
-        "splits/*",
-        "train/S2L1C/*",
-        "val/S2L1C/*",
+        #"splits/*",
+        "train/S2L2A/*",
+        "val/S2L2A/*",
     ],
     resume_download=True,
     local_dir_use_symlinks=False,

@@ -197,3 +197,5 @@ pyrightconfig.json
 # HuggingFace Data
 /hug_data
 
+
+/text-nlp

@@ -1,13 +1,3 @@
-#!/usr/bin/env python3
-"""
-dump_prehead_features_memmap.py  (features-only)
-
-Writes a SINGLE NumPy memmap `.npy` per split containing ONLY the pre-head activation maps,
-shape (N, D, Hp, Wp). This is all you need for self-supervised TopKSAE training.
-
-Reuses your Hydra config + get_data() + get_model() exactly like segmentation_training.py.
-"""
-
 import json
 from tqdm.auto import tqdm
 from pathlib import Path
@@ -38,9 +28,16 @@ def prehead_forward(model: torch.nn.Module, x: torch.Tensor, doy: Optional[torch
     ctx = torch.enable_grad() if requires_enc_grad and model.training else torch.no_grad()
     with ctx:
         pooled_feats, patch_feats = model.msclip_model.image_encoder(x)
+        patch_feats = model.vision.ln_post(patch_feats)      # [B*T, P, 768] -> LN
+        patch_feats = patch_feats @ model.vision.proj
 
     # [B, T, P, D]
     patch_feats = patch_feats.view(B, T, model.num_patches, model.embed_dim)
+
+    if model.use_l1c2l2a_adapter:
+        patch_feats = model.l1c2l2a(patch_feats.view(B*T, model.num_patches, model.embed_dim)).view(
+            B, T, model.num_patches, model.embed_dim
+        )
 
     # (B*P, T, D)
     patch_feats = patch_feats.permute(0, 2, 1, 3).contiguous().view(B * model.num_patches, T, model.embed_dim)
@@ -70,7 +67,7 @@ def prehead_forward(model: torch.nn.Module, x: torch.Tensor, doy: Optional[torch
     if model.use_cls_fusion and model.has_cls_token:
         cls_feats = cls_feats.view(B, T, model.embed_dim)
         cls_feats = model.cls_temp_enc(cls_feats)
-        patch_feats = patch_feats + model.cls_fuse_proj(cls_feats).unsqueeze(1)
+        patch_feats = patch_feats + cls_feats.view(B,1,self.embed_dim)
 
     # [B,D,H_p,W_p]
     patch_feats = patch_feats.view(B, model.H_patch, model.W_patch, model.embed_dim).permute(0, 3, 1, 2).contiguous()
@@ -84,8 +81,6 @@ def _first_batch_shapes(dataloader, model, device):
         b0 = b0[0]
     x = b0["inputs"].to(device, non_blocking=True)
     doy = b0.get("doy", None)
-    print("x = ",x.shape)
-    print("doy = ",doy.shape)
     if doy is not None:
         if doy.ndim == 5:   # [B, T, H, W, C]
             if doy.shape[-1] == 1:
@@ -119,20 +114,20 @@ def _split_loader(dm, name: str):
         return None
 
 
-def _open_mm(path: Path, shape, dtype="float16"):
+def _open_mm(path: Path, shape, dtype="float32"):
     path.parent.mkdir(parents=True, exist_ok=True)
     return open_memmap(str(path), mode="w+", dtype=dtype, shape=shape)
 
 
-@hydra.main(version_base=None, config_path="/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_Fixed3/")
+@hydra.main(version_base=None, config_path="/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_CLIPspace/")
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_container(cfg, resolve=True)
 
-    out_root = Path(cfg.setdefault("OUTPUT", {}).setdefault("out_dir", "./sae_features_mm"))
-    dtype = cfg["OUTPUT"].get("dtype", "float16")  # float16 | float32
-    splits = cfg.setdefault("DUMP", {}).setdefault("splits", ["train", "val", "test"])
+    out_root = Path(cfg["OUTPUT"]["out_root"])
+    dtype = "float32"  # float16 | float32
+    splits = ["train", "validation","test"]
 
-    device = get_device(cfg["SET-UP"]["local_device_ids"], allow_cpu=False)
+    device = 0
     dm = get_data(cfg)
     model = get_model(cfg, device)
     ckpt = cfg["CHECKPOINT"].get("load_from_checkpoint", "")
@@ -153,6 +148,8 @@ def main(cfg: DictConfig):
 
         f_path = out_root / split / "features.npy"
         feats_mm = _open_mm(f_path, shape=(N, D, Hp, Wp), dtype=dtype)
+        labels_mm = np.lib.format.open_memmap(out_root / split / "labels.npy", mode="w+", dtype=np.uint8, shape=(N, Hp, Wp))
+
 
         total_batches = len(dl)
 
@@ -162,13 +159,18 @@ def main(cfg: DictConfig):
             if isinstance(batch, (list, tuple)):
                 batch = batch[0]
             x = batch["inputs"].to(device, non_blocking=True)
+
             doy = batch.get("doy", None)
             if doy is not None:
-                doy = doy.to(device, non_blocking=True)
+                doy = doy.to(device, non_blocking=True) 
             feats = prehead_forward(model.model, x, doy)  # [B,D,Hp,Wp]
             B = feats.shape[0]
             out = feats.half().cpu().numpy() if dtype == "float16" else feats.float().cpu().numpy()
             feats_mm[cursor:cursor + B] = out
+            lbl_small = torch.nn.functional.interpolate(batch["labels"].permute(0,3,1,2).float(), size=feats.shape[-2:], mode="nearest").squeeze(1)
+            labels_mm[cursor:cursor+B] = lbl_small.cpu().numpy().astype(np.uint8)
+
+
             cursor += B
 
             pbar.update(1)
@@ -177,6 +179,7 @@ def main(cfg: DictConfig):
 
         # close
         del feats_mm
+        del labels_mm
 
         manifest["splits"].append({
             "split": split,

@@ -90,6 +90,7 @@ MODEL:
   temp_enc_type: attention
   threshold: 0.5
   train_max_seq_len: 5
+  test_max_seq_len: 5
   unfreeze_last_block: false
   use_cls_fusion: false
   use_l1c2l2a_adapter: false
