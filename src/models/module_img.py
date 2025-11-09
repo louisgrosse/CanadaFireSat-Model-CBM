@@ -112,6 +112,12 @@ class ImgModule(LightningModule):
 
             self.log_dict(batch_metrics, on_step=True, on_epoch=False, prog_bar=False, logger=True)
 
+        w = getattr(self.model.temp_enc, "last_attn_weights", None)
+        if w is not None:
+            H = -(w * (w.clamp_min(1e-8).log())).sum(dim=-1).mean()  # Shannon entropy
+            loss = loss + 1e-3 * H
+
+
         return {"loss": loss, "logits": outputs, "ground_truths": ground_truth}
 
     def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
@@ -227,21 +233,19 @@ class ImgModule(LightningModule):
 
     def configure_optimizers(self) -> Dict[str, Any]:
         """Function to set-up the optimizer and scheduler"""
-        trainable_params = get_trainable_params(
-            self.model, model_type=self.model_type, lr=self.lr, lr_ratio=self.lr_ratio, mode=self.lr_mode
-        )
-        optimizer = torch.optim.AdamW(trainable_params, weight_decay=self.weight_decay)
-        scheduler = build_scheduler_pytorch(
-            config=self.scheduler_config,
-            optimizer=optimizer,
-            n_iter_per_epoch=self.num_steps_train,
-            interval=self.interval,
-        )
+        pool_params, base_params = [], []
+        for n,p in self.model.named_parameters():
+            if not p.requires_grad: 
+                continue
+            (pool_params if "temp_enc" in n else base_params).append(p)
 
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": self.interval,
-            },
-        }
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": base_params, "lr": self.lr, "weight_decay": self.weight_decay},
+                {"params": pool_params, "lr": self.lr * 0.1, "weight_decay": 0.0},
+            ]
+        )
+        scheduler = build_scheduler_pytorch(config=self.scheduler_config, optimizer=optimizer,
+                                            n_iter_per_epoch=self.num_steps_train, interval=self.interval)
+        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": self.interval}}
+

@@ -64,6 +64,52 @@ class TemporalAttention(nn.Module):
 
         return x.mean(dim=1) 
 
+class XAITemporalPool(nn.Module):
+    """
+    Weights-only temporal pooling:
+      - x must already be in MS-CLIP space (512-d after ln_post+proj)
+      - learns a query q and temperature tau to score timestamps
+      - returns a convex combination of input tokens (values untouched)
+    """
+    def __init__(self, dim: int, init_temp: float = 2.0):
+        super().__init__()
+        self.q = nn.Parameter(torch.zeros(dim))
+        nn.init.normal_(self.q, std=1e-2)
+
+        self.log_tau = nn.Parameter(torch.log(torch.tensor(float(init_temp))))
+        self.gate = nn.Parameter(torch.tensor(-4.0))  # starts near mean: sigmoid(-4)≈0.018
+        self._doy_raw = nn.Parameter(torch.tensor(0.1))  # bounded via tanh below
+        self.value_scale = nn.Parameter(torch.tensor(1.0))
+        self.last_attn_weights = None
+
+    @property
+    def doy_scale(self):
+        # keeps seasonality modest and stable
+        return 0.5 * torch.tanh(self._doy_raw)
+
+    def forward(self, x: torch.Tensor, doy_emb: torch.Tensor = None) -> torch.Tensor:
+        # x: [B*P, T, D] already in CLIP space
+        q   = F.normalize(self.q,  dim=0,   eps=1e-6)    # [D]
+        x_n = F.normalize(x,      dim=-1,  eps=1e-6)    # [B*P,T,D]
+
+        scores = torch.matmul(x_n, q)                   # [B*P,T]
+        if doy_emb is not None:
+            doy_n = F.normalize(doy_emb, dim=-1, eps=1e-6)       # [B*P,T,D]
+            scores = scores + self.doy_scale * torch.matmul(doy_n, q)
+
+        tau = torch.exp(self.log_tau).clamp(0.5, 5.0)
+        w = torch.softmax(tau * scores, dim=1)          # [B*P,T]
+        self.last_attn_weights = w.detach()
+
+        z_attn = torch.einsum("btd,bt->bd", x, w)       # [B*P,D]; values untouched
+        z_attn = F.normalize(z_attn, dim=-1, eps=1e-6) * self.value_scale
+
+        z_mean = x.mean(dim=1)
+        g = torch.sigmoid(self.gate)
+        return (1 - g) * z_mean + g * z_attn
+
+
+
 
 
 class MSClipFactorizeModel(nn.Module):
@@ -139,6 +185,7 @@ class MSClipFactorizeModel(nn.Module):
 
 
         self.embed_dim = 512
+        self.mix_dim   = 768 
         self.H_patch = self.image_size // self.patch_size
         self.W_patch = self.image_size // self.patch_size
         self.num_patches = self.H_patch * self.W_patch
@@ -154,10 +201,15 @@ class MSClipFactorizeModel(nn.Module):
         
 
         if self.use_doy:
-            self.doy_embed = DOYEmbed(self.embed_dim)
+            self.doy_embed_mix  = DOYEmbed(self.mix_dim)
+            self.doy_embed_pool = DOYEmbed(self.embed_dim)
+
+        self.temporal_mixer = TemporalMixer(embed_dim=self.mix_dim, num_heads=4, mlp_ratio=2.0, dropout=0.1)
 
         if temp_enc_type == "attention":
-            self.temp_enc = TemporalAttention(embed_dim=self.embed_dim, num_heads=8, dropout=0.1, learned_query=learned_query)
+            #self.temp_enc = TemporalAttention(embed_dim=self.embed_dim, num_heads=8, dropout=0.1, learned_query=learned_query)
+            self.temp_enc = XAITemporalPool(dim=self.embed_dim, init_temp=2.0)  # you can keep 5.0 if you prefer
+
         else:
             raise ValueError(f"Unknown temp_enc_type: {temp_enc_type}")
 
@@ -169,6 +221,10 @@ class MSClipFactorizeModel(nn.Module):
           #  p.requires_grad = False
 
         self.head = nn.Conv2d(self.embed_dim, num_classes, 1)
+        nn.init.kaiming_normal_(self.head.weight, nonlinearity="linear")
+        if self.head.bias is not None:
+            nn.init.zeros_(self.head.bias)
+
     
     def _iter_vit_blocks(self, enc):
         """

@@ -17,7 +17,7 @@ MODEL:
   channels: 10
   threshold: 0.5
   ds_labels: true
-  use_cls_fusion: true
+  use_cls_fusion: false
   use_l1c2l2a_adapter: false
   unfreeze_last_block: false
   pretrained: true
@@ -25,7 +25,6 @@ MODEL:
   out_H: 25
   out_W: 25
   temp_enc_type: "attention" 
-  learned_query: false
   freeze_msclip: true
   clearclip:
     enabled: false          
@@ -80,7 +79,7 @@ DATASETS:
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "MS-CLIP_clsfusion"
+  experiment_name: "MS-CLIP_FixedAtt2"
   save_path: "./results/models"
   train_metrics_steps: 200 
   save_steps: 10000

@@ -91,7 +91,7 @@ sae:
   # resample_steps: [300000, 600000, 900000, 1200000] # Rougly 1.2M steps
   resample_every_n_epochs: 100 # Equvivalent to NO resampling
   resample_batch_size: 256
-  bind_init: True
+  bind_init: False
   decay_k: False
   # depth_scale_shift: 2
   #criterion_kwargs:
@@ -161,7 +161,7 @@ seed: 42
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "SAE_k8_8192_archetypal"
+  experiment_name: "SAE_k8_8192_archetypal_16ks"
   save_path: "./results/topk_overcomplete_runs"
   train_metrics_steps: 200 
   save_steps: 10000

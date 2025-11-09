@@ -93,10 +93,10 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
     if cfg["use_archetypal"]["enabled"]:
         if cfg["use_archetypal"]["uniform"]:
             print("Using unisform sampling to sample points")
-            points = sample_points_uniform(dl = act_datamodule.train_dataloader(),n_points=32000)
+            points = sample_points_uniform(dl = act_datamodule.train_dataloader(),n_points=16000)
         else:
             print("Using k-means to sample points")
-            points = sample_points_kmeans(dl = act_datamodule.train_dataloader(),n_centers=32_000)
+            points = sample_points_kmeans(dl = act_datamodule.train_dataloader(),n_centers=16_000)
             
         archetypal_dict = RelaxedArchetypalDictionary(
             in_dimensions=cfg.sae.sae_kwargs["input_shape"],
@@ -167,7 +167,7 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
 )
 
 
-def sample_points_uniform(n_points=32000, dl =None, cap_tokens_per_batch=4096, device="cpu"):
+def sample_points_uniform(n_points=16000, dl =None, cap_tokens_per_batch=4096, device="cpu"):
 
     points = []
     with torch.no_grad():
@@ -195,7 +195,7 @@ def sample_points_uniform(n_points=32000, dl =None, cap_tokens_per_batch=4096, d
     return points.to(device)
 
 @torch.no_grad()
-def sample_points_kmeans(dl=None, n_centers=32_000, cap_tokens_per_batch=8192):
+def sample_points_kmeans(dl=None, n_centers=16_000, cap_tokens_per_batch=8192):
     kmeans = MiniBatchKMeans(
         n_clusters=n_centers,
         batch_size=cap_tokens_per_batch,
