@@ -203,6 +203,9 @@ def assign_labels_to_patches(patch_embs: torch.Tensor, text_embs: torch.Tensor, 
     # [B,P,D] -> [B*P,D]
     flat = patch_embs.reshape(B * P, D)  # [BP,D]
 
+
+    print("patchs_flat:", flat.shape, " and text_embs:", text_embs.shape)
+    sys.exit(0)
     # [BP,N] similarities
     sims_flat = flat @ text_embs.t()     # both already L2-normalized so this is cosine
 

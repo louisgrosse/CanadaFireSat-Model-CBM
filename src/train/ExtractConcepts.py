@@ -133,7 +133,7 @@ final_items.sort(key=lambda x: (-x[1], x[0]))
 top_items = final_items[:TOP_N]
 
 # save outputs
-out_counts = OUT_DIR / "concept_counts50k_spacy.csv"
+out_counts = OUT_DIR / "concept_counts50k_spacy_singleWords.csv"
 
 pd.DataFrame(final_items, columns=["concept","count"]).to_csv(out_counts, index=False)
 

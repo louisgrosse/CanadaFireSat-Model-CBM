@@ -20,11 +20,15 @@ MODEL:
   use_cls_fusion: false
   use_l1c2l2a_adapter: false
   unfreeze_last_block: false
+  ABMIL: true           # use ABMIL module      
+  log_abmil: true               # turn on/off logging of ABMIL attention
+  log_abmil_fold_mixer: true    
+  fire_class_id: 1  
   pretrained: true
   l1c2l2a_Adapter_loc: "${paths.l1c2l2a_Adapter_loc}"
   out_H: 25
   out_W: 25
-  temp_enc_type: "attention" 
+  temp_enc_type: "mixer"  #attention, mixer
   freeze_msclip: true
   clearclip:
     enabled: false          
@@ -79,7 +83,7 @@ DATASETS:
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "MS-CLIP_FixedAtt2"
+  experiment_name: "MS-CLIP_ABMIL_logging"
   save_path: "./results/models"
   train_metrics_steps: 200 
   save_steps: 10000

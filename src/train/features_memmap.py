@@ -16,7 +16,7 @@ from src.data import get_data
 from src.models import get_model
 from src.utils.torch_utils import load_from_checkpoint
 
-
+"""
 @torch.no_grad()
 def prehead_forward(model: torch.nn.Module, x: torch.Tensor, doy: Optional[torch.Tensor] = None) -> torch.Tensor:
     #[B, T, C, H, W] 
@@ -72,6 +72,64 @@ def prehead_forward(model: torch.nn.Module, x: torch.Tensor, doy: Optional[torch
     # [B,D,H_p,W_p]
     patch_feats = patch_feats.view(B, model.H_patch, model.W_patch, model.embed_dim).permute(0, 3, 1, 2).contiguous()
 
+    return patch_feats"""
+
+
+@torch.no_grad()
+def prehead_forward(model: torch.nn.Module, x: torch.Tensor, doy: Optional[torch.Tensor] = None) -> torch.Tensor:
+# [B, T, C, H, W]
+    B, T, C, H, W = x.shape
+
+    x = x.reshape(B * T, C, H, W)
+
+    # Encoder
+    pooled_feats, patch_feats = model.msclip_model.image_encoder(x)  # pooled_feats: [B*T, 512], patch_feats: [B*T, P, 768]
+    patch_feats = patch_feats.view(B, T, model.num_patches, model.mix_dim) \
+                            .permute(0, 2, 1, 3).contiguous() \
+                            .view(B * model.num_patches, T, model.mix_dim)          # [B*P, T, 768]
+
+    # DOY for mixer (768-d)
+    doy_mix = None
+    if model.use_doy and (doy is not None):
+        if doy.ndim > 2:  
+            doy = doy.view(B, T, -1)[:, :, 0]
+        assert doy.shape == (B, T), f"DOY must be [B,T], got {tuple(doy.shape)}"
+        d = model.doy_embed_mix(doy).unsqueeze(1).expand(-1, model.num_patches, -1, -1) \
+                                .reshape(B * model.num_patches, T, model.mix_dim)
+        doy_mix = d
+
+    # Temporal mixing in 768
+    mix_out = model.temporal_mixer(patch_feats, doy_emb=doy_mix)                    # [B*P, T, 768]
+
+    if model.ABMIL:
+        proj_seq = model.vision.ln_post(mix_out)                                    # [B*P, T, 768]
+        proj_seq = torch.einsum("btd,df->btf", proj_seq, model.vision.proj)         # [B*P, T, 512]
+
+        doy_pool = None
+        if model.use_doy and (doy is not None):
+            d = model.doy_embed_pool(doy).unsqueeze(1).expand(-1, model.num_patches, -1, -1) \
+                                    .reshape(B * model.num_patches, T, model.embed_dim)
+            doy_pool = d
+
+        patch_vec = model.temp_enc(proj_seq, doy_emb=doy_pool)                      # [B*P, 512]
+    else:
+        last_768  = mix_out[:, -1, :]                                              # [B*P, 768]
+        last_768  = model.vision.ln_post(last_768)                                  # [B*P, 768]
+        patch_vec = last_768 @ model.vision.proj                                     # [B*P, 512]
+
+    # [B*P, 512] -> [B, P, 512]
+    patch_feats = patch_vec.view(B, model.num_patches, model.embed_dim)
+
+    if model.use_cls_fusion and model.has_cls_token:
+        cls_feats = pooled_feats.view(B, T, model.embed_dim)                         # [B, T, 512]
+        cls_feats = model.cls_temp_enc(cls_feats)                                    # [B, 512]
+        patch_feats = patch_feats + cls_feats.unsqueeze(1)                          # broadcast over patches
+
+    # [B, P, 512] -> [B, 512, H_p, W_p]
+    patch_feats = patch_feats.view(B, model.H_patch, model.W_patch, model.embed_dim) \
+                            .permute(0, 3, 1, 2).contiguous()
+
+
     return patch_feats
 
 
@@ -119,7 +177,7 @@ def _open_mm(path: Path, shape, dtype="float32"):
     return open_memmap(str(path), mode="w+", dtype=dtype, shape=shape)
 
 
-@hydra.main(version_base=None, config_path="/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_CLIPspace/")
+@hydra.main(version_base=None, config_path="/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_fusedCLS/")
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_container(cfg, resolve=True)
 

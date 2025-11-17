@@ -58,8 +58,7 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
     act_datamodule = NpyActDataModule(
         batch_size=cfg.sae_batch_size,
         train_npy_path=cfg.datamodule["train_path"],
-        val_npy_path=cfg.datamodule["train_path"],
-        test_npy_path=cfg.datamodule["train_path"]
+        val_npy_path=cfg.datamodule["train_path"]
     )
 
     align = cfg["ALIGN"]
@@ -130,7 +129,7 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
     # 4) Save CSV in the Hydra run dir
     out_df = pd.DataFrame(rows, columns=columns)
     os.makedirs(hydra_run_dir, exist_ok=True)
-    out_csv = os.path.join(hydra_run_dir, "/home/grosse/CanadaFireSat-Model-CBM/results/dictionnary/npy_vs_dicts_cosine.csv")
+    out_csv = os.path.join(hydra_run_dir, "/home/grosse/CanadaFireSat-Model-CBM/results/dictionnary/npy_vs_dicts_cosineABMIL.csv")
     out_df.to_csv(out_csv, index=False)
     log.info(f"Saved results to: {out_csv}")
     return {"csv_path": out_csv}

@@ -64,6 +64,7 @@ class TemporalAttention(nn.Module):
 
         return x.mean(dim=1) 
 
+
 class XAITemporalPool(nn.Module):
     """
     Weights-only temporal pooling:
@@ -77,8 +78,8 @@ class XAITemporalPool(nn.Module):
         nn.init.normal_(self.q, std=1e-2)
 
         self.log_tau = nn.Parameter(torch.log(torch.tensor(float(init_temp))))
-        self.gate = nn.Parameter(torch.tensor(-4.0))  # starts near mean: sigmoid(-4)≈0.018
-        self._doy_raw = nn.Parameter(torch.tensor(0.1))  # bounded via tanh below
+        self.gate = nn.Parameter(torch.tensor(-4.0))  
+        self._doy_raw = nn.Parameter(torch.tensor(0.1)) 
         self.value_scale = nn.Parameter(torch.tensor(1.0))
         self.last_attn_weights = None
 
@@ -101,7 +102,7 @@ class XAITemporalPool(nn.Module):
         w = torch.softmax(tau * scores, dim=1)          # [B*P,T]
         self.last_attn_weights = w.detach()
 
-        z_attn = torch.einsum("btd,bt->bd", x, w)       # [B*P,D]; values untouched
+        z_attn = torch.einsum("btd,bt->bd", x, w)       # [B*P,D];
         z_attn = F.normalize(z_attn, dim=-1, eps=1e-6) * self.value_scale
 
         z_mean = x.mean(dim=1)
@@ -109,7 +110,34 @@ class XAITemporalPool(nn.Module):
         return (1 - g) * z_mean + g * z_attn
 
 
+class TemporalMixer(nn.Module):
+    """
+    Small, stable pre-projection temporal mixer (keeps sequence length T).
+    Pre-norm MHA + MLP with residuals; DOY can nudge Q/K but leaves values on the identity path.
+    """
+    def __init__(self, embed_dim=768, num_heads=4, mlp_ratio=2.0, dropout=0.1):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.attn  = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
+        self.norm2 = nn.LayerNorm(embed_dim)
+        self.last_attn = None  # [B*P, T, T]
+        hidden = int(embed_dim * mlp_ratio)
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim, hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden, embed_dim),
+            nn.Dropout(dropout),
+        )
 
+    def forward(self, x, doy_emb=None):
+        # x: [B*P, T, 768], doy_emb: [B*P, T, 768] or None
+        qk = self.norm1(x + (doy_emb if doy_emb is not None else 0.0))
+        y, attn = self.attn(qk, qk, x, need_weights=True, average_attn_weights=True)
+        self.last_attn = attn.detach()  # [B*P, T, T]
+        x = x + y                              # residual
+        x = x + self.mlp(self.norm2(x))        # FFN block
+        return x                                # [B*P, T, 768]
 
 
 class MSClipFactorizeModel(nn.Module):
@@ -133,6 +161,7 @@ class MSClipFactorizeModel(nn.Module):
         l1c2l2a_Adapter_loc:str = "",
         unfreeze_last_block:bool = False,
         learned_query: bool = False,
+        ABMIL: bool = False,
         pretrained: bool = True,
         model_config: Dict[str, Any] = None,
         sae_model_config: Dict[str, Any] = None,
@@ -148,6 +177,8 @@ class MSClipFactorizeModel(nn.Module):
         self.image_size = image_size
         self.patch_size = patch_size
         self.use_cls_fusion = use_cls_fusion
+        self.temp_enc_type = temp_enc_type
+        self.ABMIL = ABMIL
 
         msclip_model, preprocess, tokenizer = build_model(
             model_name=model_name, pretrained=pretrained, ckpt_path=ckpt_path, device="cpu", channels=channels
@@ -206,16 +237,14 @@ class MSClipFactorizeModel(nn.Module):
 
         self.temporal_mixer = TemporalMixer(embed_dim=self.mix_dim, num_heads=4, mlp_ratio=2.0, dropout=0.1)
 
-        if temp_enc_type == "attention":
-            #self.temp_enc = TemporalAttention(embed_dim=self.embed_dim, num_heads=8, dropout=0.1, learned_query=learned_query)
-            self.temp_enc = XAITemporalPool(dim=self.embed_dim, init_temp=2.0)  # you can keep 5.0 if you prefer
-
+        if self.temp_enc_type == "attention":
+            self.temp_enc = TemporalAttention(embed_dim=self.embed_dim, num_heads=8, dropout=0.1, learned_query=learned_query)
         else:
-            raise ValueError(f"Unknown temp_enc_type: {temp_enc_type}")
+            self.temp_enc = XAITemporalPool(dim=self.embed_dim, init_temp=2.0) 
 
         if self.use_cls_fusion and self.has_cls_token:
             self.cls_temp_enc = TemporalAttention(embed_dim=self.embed_dim, num_heads=4, dropout=0.1, learned_query=learned_query)
-
+        
         #self.sae = _load_sae_from_ckpt(sae_ckpt, device='cpu')
         #for p in self.sae.parameters():
           #  p.requires_grad = False
@@ -254,6 +283,12 @@ class MSClipFactorizeModel(nn.Module):
                 p.requires_grad = True
 
     def forward(self, batch, doy=None):
+        if self.temp_enc_type == "attention":
+            return self.forwardAttention(batch,doy)
+        else:
+            return self.forwardMixer(batch,doy)
+
+    def forwardAttention(self, batch, doy=None):
         #[B, T, C, H, W] 
         assert batch.ndim == 5, f"inputs must be [B,T,C,H,W], got {batch.ndim} dims"
         B, T, C, H, W = batch.shape
@@ -270,7 +305,6 @@ class MSClipFactorizeModel(nn.Module):
         requires_enc_grad = any(p.requires_grad for p in self.image_encoder.parameters())
         ctx = torch.enable_grad() if requires_enc_grad and self.training else torch.no_grad()
         with ctx:
-            #pooled_feats, patch_feats = self.msclip_model.clip_base_model.model.visual(x)       # pooled: [B, D], patch_tokens: [B*T, P, D]  [120, 512] and [120, 196, 768]
             pooled_feats, patch_feats = self.msclip_model.image_encoder(x)       # pooled: [B, D], patch_tokens: [B*T, P, D]  [120, 512] and [120, 196, 768]
             patch_feats = self.vision.ln_post(patch_feats)      # [B*T, P, 768] -> LN
             patch_feats = patch_feats @ self.vision.proj
@@ -320,4 +354,91 @@ class MSClipFactorizeModel(nn.Module):
             out = F.interpolate(out, size=(self.out_H, self.out_W), mode="bilinear", align_corners=False)
 
         return out
+
+    def forwardMixer(self, batch, doy=None):
+        # [B, T, C, H, W]
+        assert batch.ndim == 5, f"inputs must be [B,T,C,H,W], got {batch.ndim} dims"
+        B, T, C, H, W = batch.shape
+        assert C == self.channels, f"channels mismatch: got {C}, expected {self.channels}"
+
+        x = batch.reshape(B * T, C, H, W)
+
+        # Encoder
+        pooled_feats, patch_feats = self.msclip_model.image_encoder(x)  # pooled_feats: [B*T, 512], patch_feats: [B*T, P, 768]
+        patch_feats = patch_feats.view(B, T, self.num_patches, self.mix_dim) \
+                                .permute(0, 2, 1, 3).contiguous() \
+                                .view(B * self.num_patches, T, self.mix_dim)          # [B*P, T, 768]
+
+        # DOY for mixer (768-d)
+        doy_mix = None
+        if self.use_doy and (doy is not None):
+            if doy.ndim > 2:  
+                doy = doy.view(B, T, -1)[:, :, 0]
+            assert doy.shape == (B, T), f"DOY must be [B,T], got {tuple(doy.shape)}"
+            d = self.doy_embed_mix(doy).unsqueeze(1).expand(-1, self.num_patches, -1, -1) \
+                                    .reshape(B * self.num_patches, T, self.mix_dim)
+            doy_mix = d
+
+        # Temporal mixing in 768
+        mix_out = self.temporal_mixer(patch_feats, doy_emb=doy_mix)                    # [B*P, T, 768]
+
+        if self.ABMIL:
+            proj_seq = self.vision.ln_post(mix_out)                                    # [B*P, T, 768]
+            proj_seq = torch.einsum("btd,df->btf", proj_seq, self.vision.proj)         # [B*P, T, 512]
+
+            doy_pool = None
+            if self.use_doy and (doy is not None):
+                d = self.doy_embed_pool(doy).unsqueeze(1).expand(-1, self.num_patches, -1, -1) \
+                                        .reshape(B * self.num_patches, T, self.embed_dim)
+                doy_pool = d
+
+            patch_vec = self.temp_enc(proj_seq, doy_emb=doy_pool)                      # [B*P, 512]
+        else:
+            last_768  = mix_out[:, -1, :]                                              # [B*P, 768]
+            last_768  = self.vision.ln_post(last_768)                                  # [B*P, 768]
+            patch_vec = last_768 @ self.vision.proj                                     # [B*P, 512]
+
+        # [B*P, 512] -> [B, P, 512]
+        patch_feats = patch_vec.view(B, self.num_patches, self.embed_dim)
+
+        if self.use_cls_fusion and self.has_cls_token:
+            cls_feats = pooled_feats.view(B, T, self.embed_dim)                         # [B, T, 512]
+            cls_feats = self.cls_temp_enc(cls_feats)                                    # [B, 512]
+            patch_feats = patch_feats + cls_feats.unsqueeze(1)                          # broadcast over patches
+
+        # [B, P, 512] -> [B, 512, H_p, W_p]
+        patch_feats = patch_feats.view(B, self.H_patch, self.W_patch, self.embed_dim) \
+                                .permute(0, 3, 1, 2).contiguous()
+
+        out = self.head(patch_feats)
+        out = F.interpolate(
+            out, size=(H, W) if not self.ds_labels else (self.out_H, self.out_W),
+            mode="bilinear", align_corners=False
+        )
+        return out
+
+    @torch.no_grad()
+    def encode_patches(self, batch):
+        """
+        Extract per-time, per-patch MS-CLIP embeddings *before* temporal aggregation.
+
+        Args:
+            batch: [B, T, C, H, W] tensor (same normalization as segmentation training)
+
+        Returns:
+            patch_feats: [B, T, P, D] where D=self.embed_dim (512),
+                         P = H_patch * W_patch
+        """
+        assert batch.ndim == 5, f"Expected [B,T,C,H,W], got {batch.shape}"
+        B, T, C, H, W = batch.shape
+
+        x = batch.reshape(B * T, C, H, W)
+
+        pooled_feats, patch_feats = self.msclip_model.image_encoder(x)  # patch_feats: [B*T, P, 768]
+
+        patch_feats = self.vision.ln_post(patch_feats)                  # [B*T, P, 768]
+        patch_feats = patch_feats @ self.vision.proj                    # [B*T, P, 512]
+
+        patch_feats = patch_feats.view(B, T, self.num_patches, self.embed_dim)
+        return patch_feats
 

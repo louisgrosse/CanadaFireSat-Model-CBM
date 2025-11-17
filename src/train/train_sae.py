@@ -22,11 +22,13 @@ import logging
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
+from tqdm import tqdm
 from src.models.sae import plSAE
 from src.utils.process_utils import save_activations_to_npy, save_labels_to_npy
 import numpy as np
 from src.constants import CONFIG_PATH
 import sys
+from src.data.hf_Canada.ssl4eos12_dataset import SSL4EOS12Dataset, collate_fn, S2L1C_MEAN, S2L1C_STD,S2L2A_MEAN, S2L2A_STD
 
 sys.path.append('MS-CLIP')
 from msclip.inference.utils import build_model
@@ -73,9 +75,48 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
     log.info(f"Instantiating SAE <{cfg.sae._target_}>")
     sae: plSAE = hydra.utils.instantiate(cfg.sae)
 
+    if cfg["model"]["net"]["from_msclip"]:
     #If someday we want to train the sae directly after computing the npy files.
-    #log.info(f"Instantiating Backbone <{cfg.model.net._target_}>")
-    #net: nn.Module = hydra.utils.instantiate(cfg.model.net)
+        log.info(f"Instantiating Backbone <{cfg.model.net._target_}>")
+        net: nn.Module = hydra.utils.instantiate(cfg.model.net)
+
+        sae.msclip_model = net
+        sae.from_msclip = True
+
+    align = cfg.get("ALIGN")
+    device = str(align.get("device", "cuda"))
+
+    model_, _, tokenizer = build_model(
+            model_name=align["msclip_model_name"],
+            pretrained=bool(align.get("pretrained", True)),
+            ckpt_path=align.get("msclip_ckpt", None),
+            device=device,
+            channels=10,
+        )
+    msclip = model_.eval().to(device)
+
+    if align is not None and align.get("enabled") and align.get("csv_phrases_path") and align.get("align_loss_coeff", 0) > 0:
+
+        all_phrases = []
+        csv_name = align["csv_cosLoss_path"]
+        if csv_name in ("concept_countsCLIPDATASET.csv", "concept_counts50k_yake.csv"):
+            df = pd.read_csv(str(align["csv_phrases_path"]) + str(csv_name), sep=';')
+        else:
+            df = pd.read_csv(str(align["csv_phrases_path"]) + str(csv_name))
+        all_phrases.extend(df["concept"].astype(str).tolist())
+
+        # Encode & normalize (reuses your helper)
+        text_embs = _encode_phrases_msclip(
+            phrases=all_phrases,
+            model=msclip,
+            tokenizer=tokenizer,
+            batch_size=int(align.get("text_batch_size", 512)),
+            device=device,
+        )  # [N, D]
+
+        sae.align_text_embs=text_embs.cpu()
+        sae.align_loss_coeff = float(align["align_loss_coeff"])
+
 
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
     trainer: Trainer = hydra.utils.instantiate(cfg.trainer, logger=[wandb_logger])
@@ -87,8 +128,10 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
     trainer_sae: Trainer = hydra.utils.instantiate(cfg.trainer_sae, callbacks=callbacks, logger=[wandb_logger])
 
     datamodule.setup()
-
-    act_datamodule = NpyActDataModule(batch_size=cfg.sae_batch_size, train_npy_path=cfg.datamodule["train_path"], val_npy_path=cfg.datamodule["train_path"], test_npy_path=cfg.datamodule["train_path"])
+    
+    act_datamodule = None
+    if not cfg["model"]["net"]["from_msclip"]:
+        act_datamodule = NpyActDataModule(batch_size=cfg.sae_batch_size, train_npy_path=cfg.datamodule["train_path"], val_npy_path=cfg.datamodule["train_path"], test_npy_path=cfg.datamodule["train_path"])
 
     if cfg["use_archetypal"]["enabled"]:
         if cfg["use_archetypal"]["uniform"]:
@@ -105,28 +148,29 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
             delta=1.0,
         )
         sae.net.dictionary = archetypal_dict
+        if cfg.sae["bind_init"]:
+            sae._initialize_encoder_from_decoder()
 
     # Training the SAE
-    trainer_sae.fit(model=sae, datamodule=act_datamodule, ckpt_path=cfg.get("sae_ckpt_path"))
+    if not cfg["model"]["net"]["from_msclip"]:
+        trainer_sae.fit(model=sae, datamodule=act_datamodule, ckpt_path=cfg.get("sae_ckpt_path"))
+    else:
+        trainer_sae.fit(model=sae, datamodule=datamodule)
+
 
     align = cfg.get("ALIGN")
     if align is not None and align.get("csv_phrases_path") and align["enabled"]:
         device = str(align.get("device", "cuda"))
         columns = ["dict", "mean", "std", "N", "max"]
         data = []
+        dataNames = []
 
-        for csv_name in align["csv_names"]:
-            df = pd.read_csv(str(align["csv_phrases_path"])+str(csv_name))
+        for csv_name in tqdm(align["csv_names"]):
+            if csv_name == "concept_countsCLIPDATASET.csv" or csv_name == "concept_counts50k_yake.csv":
+                df = pd.read_csv(str(align["csv_phrases_path"])+str(csv_name),sep=';')
+            else:
+                df = pd.read_csv(str(align["csv_phrases_path"])+str(csv_name))
             phrases = df["concept"].astype(str).tolist()
-
-            model_, _, tokenizer = build_model(
-                model_name=align["msclip_model_name"],
-                pretrained=bool(align.get("pretrained", True)),
-                ckpt_path=align.get("msclip_ckpt"),
-                device=device,
-                channels=10,  
-            )
-            msclip = model_.eval().to(device)
 
             text_embs = _encode_phrases_msclip(
                 phrases=phrases,
@@ -136,22 +180,26 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
                 device=device,
             )  # [N, Dt]
 
-            vp = msclip.clip_base_model.model.visual.proj
-
-            mean_c, std_c, max_c = _compute_alignment_stats(
+            mean_c, std_c, max_c, top_rows = _alignment_stats_and_topk(
                 sae_module=sae,
                 text_embs=text_embs,
-                vision_proj=vp,
                 device=device,
+                phrases=phrases,
+                k=5,
+                name = csv_name,
             )
 
             max_v = float(max_c)
             mean = float(mean_c)
             std  = float(std_c)
-
-            data.append([csv_name, mean, std, len(phrases),max_v])
-
+            data.append([csv_name, mean, std, len(phrases), max_v])
             print(f"[ALIGN] top1 cosine — mean={mean_c:.4f}, std={std_c:.4f} {csv_name}")
+
+            wandb_logger.log_table(
+                key=f"dictionnary_{csv_name}",
+                columns=["rank", "concept", "best_sae_concept_id", "cosine"],
+                data=top_rows,
+            )
 
         wandb_logger.log_table(key="alignment", columns=columns, data=data)
 
@@ -160,11 +208,12 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
     OmegaConf.save(cfg, os.path.join(ckpt_dir, "config.yaml"))
 
     # Test the SAE
-    trainer_sae.test(
-    model=sae,
-    datamodule=act_datamodule,
-    ckpt_path="best"
-)
+    if cfg["datamodule"]["test_path"] is not None:
+        trainer_sae.test(
+            model=sae,
+            datamodule=act_datamodule,
+            ckpt_path="best"
+        )
 
 
 def sample_points_uniform(n_points=16000, dl =None, cap_tokens_per_batch=4096, device="cpu"):
@@ -238,7 +287,21 @@ def sample_points_kmeans(dl=None, n_centers=16_000, cap_tokens_per_batch=8192):
     centers = torch.from_numpy(kmeans.cluster_centers_).float()  # [n_centers, D]
     return centers
 
+class NpyActivationDataset(Dataset):
+    def __init__(self, npy_path):
+        self.data = np.load(npy_path, mmap_mode='r')
+        lbl_path = npy_path.replace("features.npy", "labels.npy")                  
+        self.labels = np.load(lbl_path, mmap_mode='r') if os.path.exists(lbl_path) else None  
 
+    def __len__(self):
+        return self.data.shape[0]
+
+    def __getitem__(self, idx):
+        x = torch.from_numpy(self.data[idx].copy())
+        if self.labels is None:    
+            return {"inputs": x} 
+        y = torch.from_numpy(self.labels[idx].astype(np.uint8).copy())                        
+        return {"inputs": x, "label": y}  
 
 class NpyActDataModule(LightningDataModule):
     def __init__(self, batch_size: int, train_npy_path: str,
@@ -278,34 +341,35 @@ def _encode_phrases_msclip(phrases, model, tokenizer, batch_size, device):
     return torch.cat(embs, dim=0)               # [N, Dt]
 
 @torch.no_grad()
-def _compute_alignment_stats(sae_module, text_embs, vision_proj, device: str):
-    D = sae_module.net.get_dictionary().to(device).float()   # [C, Dv]  :contentReference[oaicite:2]{index=2}
+def _alignment_stats_and_topk(sae_module, text_embs, device: str, phrases, k: int = 5,name:str = None):
+    alive_mask = sae_module.val_alive_mask 
+    print("=============> Alive ?", alive_mask.shape)
 
-    # 3) Normalize and cosine sims
-    D = F.normalize(D, dim=1)                                # [C, Dt]
-    T = F.normalize(text_embs.to(device).float(), dim=1)     # [N, Dt]
-    sims = D @ T.t()                                         # [C, N]
+    D = sae_module.net.get_dictionary().to(device).float()
+    D = F.normalize(D, dim=1)
+    if alive_mask is not None:
+        print("Keeping only live atoms!!!")
+        print("before : ",D.shape)
+        D = D[alive_mask.to(D.device)]
+        print("after : ", D.shape)
 
-    # 4) Top-1 cosine per concept → mean/std
-    top1 = sims.max(dim=1).values                            # [C]
-    return top1.mean().item(), top1.std(unbiased=False).item(), top1.max().item()
+    T = F.normalize(text_embs.to(device).float(), dim=1)  # [N, Dt]
 
+    sims = D @ T.t()                              # [C, N] = concept x phrase cosine
+    top1_concept_vals = sims.max(dim=1).values    # [C]
+    mean_c = top1_concept_vals.mean().item()
+    std_c  = top1_concept_vals.std(unbiased=False).item()
+    max_c  = top1_concept_vals.max().item()
 
-class NpyActivationDataset(Dataset):
-    def __init__(self, npy_path):
-        self.data = np.load(npy_path, mmap_mode='r')
-        lbl_path = npy_path.replace("features.npy", "labels.npy")                  
-        self.labels = np.load(lbl_path, mmap_mode='r') if os.path.exists(lbl_path) else None  
+    phrase_best_vals, phrase_best_concepts = sims.max(dim=0)      # [N], [N]
+    k = min(k, phrase_best_vals.numel())
+    top_vals, top_phrase_idx = torch.topk(phrase_best_vals, k)    # [k], [k]
 
-    def __len__(self):
-        return self.data.shape[0]
+    top_rows = []
+    for rank, (pidx, val) in enumerate(zip(top_phrase_idx.tolist(), top_vals.tolist()), start=1):
+        top_rows.append([rank, phrases[pidx], int(phrase_best_concepts[pidx].item()), float(val)])
 
-    def __getitem__(self, idx):
-        x = torch.from_numpy(self.data[idx].copy())
-        if self.labels is None:    
-            return {"inputs": x} 
-        y = torch.from_numpy(self.labels[idx].astype(np.uint8).copy())                        
-        return {"inputs": x, "label": y}  
+    return mean_c, std_c, max_c, top_rows
 
 
 @hydra.main(version_base="1.2", config_path=str(CONFIG_PATH), config_name="sae_config.yaml")

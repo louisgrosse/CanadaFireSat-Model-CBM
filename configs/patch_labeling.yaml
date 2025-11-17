@@ -12,7 +12,7 @@ split: "validation"                  # "train" | "validation" | "test" | "test_h
 
 # Dictionary
 captions_dir: "/work/eceo/grosse/dictionnary/"
-captions_glob: "concept_counts10k_spacy.csv"  # "*.parquet" or "*.csv"
+captions_glob: "concept_counts10k_spacy.csv"  # "*.parquet" or "*.csv"  'concept_countsCLIPDATASET.csv'
 max_phrases:  #50000, None to take all, 
 text_batch_size: 512
 # Visualization

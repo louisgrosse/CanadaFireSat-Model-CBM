@@ -4,13 +4,13 @@ defaults:
 
 DATA:
   # Use your manifest paths
-  train_features: "/work/eceo/grosse/saeFeatures/MSCLIP_CLIPspace/train/features.npy"
+  train_features: "/work/eceo/grosse/saeFeatures/MSCLIP_ABMIL/train/features.npy"
 
 datamodule:
-  _target_: src.data.hf_Canada.sae_datamodule.SimpleActivationsDataModule
-  train_path:  /work/eceo/grosse/saeFeatures/MSCLIP_CLIPspace/train/features.npy
-  val_path:   /work/eceo/grosse/saeFeatures/MSCLIP_CLIPspace/validation/features.npy
-  test_path:  /work/eceo/grosse/saeFeatures/MSCLIP_CLIPspace/test/features.npy
+  _target_: src.data.hf_Canada.sae_datamodule.SimpleActivationsDataModule   # MSCLIP_ABMIL, MSCLIP_FusedCLS, MSClearCLIP
+  train_path:  /work/eceo/grosse/saeFeatures/MSCLIP_ABMIL/train/features.npy
+  val_path:   /work/eceo/grosse/saeFeatures/MSCLIP_ABMIL/validation/features.npy
+  test_path:  #/work/eceo/grosse/saeFeatures/MSCLIP_ABMIL/test/features.npy
   batch_size: 4096
   num_workers: 8
   normalize: false
@@ -19,6 +19,7 @@ datamodule:
 model:
   net:
     _target_: src.models.msclip_factorize_model.MSClipFactorizeModel  # example path
+    from_msclip: false
     pretrained: false
 
 task_name: "train-sae"
@@ -84,24 +85,28 @@ trainer_sae:
 sae:
   _target_: src.models.sae.plSAE
   sae_type: "topk"  #batch_topk, topk, jump,
-  loss_type: "mse_auxk"  #mse_reanim, mse_auxk
-  optimizer_type: "adam"
+  loss_type: "mse_auxk_true"  #mse_reanim, mse_auxk, mse_th, mse, mse_auxk_true
+  optimizer_type: "adam"  
   lr: ${sae_lr}
   num_samples: 100000   #max 18549
   # resample_steps: [300000, 600000, 900000, 1200000] # Rougly 1.2M steps
-  resample_every_n_epochs: 2 # Equvivalent to NO resampling
+  resample_every_n_epochs: 100 # Equvivalent to NO resampling
   resample_batch_size: 256
-  bind_init: True
-  decay_k: True
+  bind_init: true
+  decay_k: false
   # depth_scale_shift: 2
   #criterion_kwargs:
     #penalty: 0.1               
+
+  criterion_kwargs:
+    k_aux: 512          # typical value from the paper
+    penalty: 0.03125
 
   sae_kwargs:
     input_shape: ${input_shape}
     nb_concepts : ${nb_concepts}
     top_k: ${nb_k}
-    #threshold_momentum: 0.2
+    #threshold_momentum: 0.5
     device: ${oc.select:device, "cpu"}
 
 
@@ -122,8 +127,10 @@ hydra:
 
 ALIGN:
   enabled: true
+  align_loss_coeff: 0
+  csv_cosLoss_path: 'concept_counts50k_spacy.csv'  # Path to concept names for cosine loss
   csv_phrases_path: /work/eceo/grosse/dictionnary/     # CSV with columns: concept,count
-  csv_names: ['concept_counts10k_spacy.csv', 'concept_counts50k_yake.csv','wildfire_cbm_concepts_generic_5k.csv', 'concept_counts50k_spacy.csv']
+  csv_names: ['msclip_words_filtered.csv','concept_counts10k_spacy.csv', 'concept_counts50k_yake.csv','wildfire_cbm_concepts_llm_5k.csv', 'concept_counts50k_spacy.csv'] #'concept_countsCLIPDATASET.csv'
   msclip_model_name: "Llama3-MS-CLIP-Base"    
   msclip_ckpt:      
   pretrained: true
@@ -136,12 +143,12 @@ use_archetypal:
   uniform: false
 
 input_shape: 512
-nb_concepts: 4096
-nb_k: 64 # See Analysis in Scaling ...
-sae_lr: 5e-5
+nb_concepts: 8192
+nb_k: 4 # See Analysis in Scaling ...
+sae_lr: 1e-4
 sae_batch_size: 256
 sae_min_epochs: 1
-sae_max_epochs: 20
+sae_max_epochs: 100
 sae_ckpt_path: null
 
 tags: ["dev"]
@@ -161,10 +168,10 @@ seed: 42
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "SAE_k64_4096_decay4_resample"
+  experiment_name: "SAE_k4_8192_ABMIL_test"
   save_path: "./results/topk_overcomplete_runs"
   train_metrics_steps: 200 
   save_steps: 10000
   wandb_project: "${wandb.project}"
   wandb_user: "${wandb.user}"
-  group: SAE_V2
+  group: SAE_dict

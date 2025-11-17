@@ -56,6 +56,8 @@ def criterion_factory(loss_type: str, **criterion_kwargs) -> Callable[[torch.Ten
         return partial(mse_dyn_th_criterion, **criterion_kwargs)
     elif loss_type == "mse_auxk":
         return partial(top_k_auxiliary_loss, **criterion_kwargs)
+    elif loss_type == "mse_auxk_true":
+        return partial(top_k_auxiliary_loss_true, **criterion_kwargs)
     elif loss_type == "mse_reanim":
         return partial(mse_reanim_criterion, **criterion_kwargs)
     else:
@@ -114,6 +116,26 @@ def region_mse_criterion(x: torch.Tensor, x_hat: torch.Tensor,
     return mse_criterion(x_flatten, x_hat_flatten, pre_codes[lat_mask], codes[lat_mask], dictionary, aggregate_batch=aggrebate_batch)
 
 
+class AuxKDeadTracker:
+
+    def __init__(self, num_features: int,device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")):
+        self.num_features = num_features
+        self.batch_counts = torch.zeros(num_features, dtype=torch.long).to(device)
+
+    @torch.no_grad()
+    def update(self, codes: torch.Tensor, threshold: float = 0.0):
+        """
+        codes: [B, C] non-negative latent activations.
+        We increment a feature's count if it is active in *any* token of this batch.
+        """
+        active_any = (codes > threshold).any(dim=0)      # [C]
+        self.batch_counts += active_any.to(self.batch_counts.dtype)
+
+    @torch.no_grad()
+    def get_dead_mask(self) -> torch.Tensor:
+        return self.batch_counts == 0
+
+
 def region_reconstruction_error(x: torch.Tensor, x_hat: torch.Tensor, lat: torch.Tensor, lat_filter: Tuple[float] = (-40, 60)):
 
     if len(lat.shape) == 3:
@@ -135,7 +157,7 @@ def region_reconstruction_error(x: torch.Tensor, x_hat: torch.Tensor, lat: torch
     else:
         x_hat_flatten = x_hat.clone()
 
-    assert x_flatten.shape == x_hat_flatten.shape
+    assert x_flatten.shape == x_hat_flatten.shape, ("test")
     lat_mask = (lat <= lat_filter[0]) | (lat >= lat_filter[1])
 
     x_flatten = x_flatten[lat_mask]
@@ -354,3 +376,64 @@ def top_k_auxiliary_loss(x, x_hat, pre_codes, codes, dictionary, penalty=0.1, sc
 
     loss = mse + penalty * auxilary_mse
     return loss
+
+def top_k_auxiliary_loss_true(
+    x: torch.Tensor,
+    x_hat: torch.Tensor,
+    pre_codes: torch.Tensor,
+    codes: torch.Tensor,
+    dictionary: torch.Tensor,
+    auxk_tracker: AuxKDeadTracker,
+    k_aux: int = 512,
+    penalty: float = 1.0 / 32.0,
+    aggregate_batch: bool = True,
+) -> torch.Tensor:
+    """
+    AuxK-inspired loss (Gao et al. 2024):
+
+        L = ||x - x_hat||^2 + penalty * ||r - r_hat||^2
+
+    where r = x - x_hat is the residual, and r_hat is reconstructed using ONLY
+    latents that are currently 'dead' according to auxk_tracker.
+    """
+
+    residual = x - x_hat
+    if aggregate_batch:
+        mse = residual.square().mean()
+    else:
+        mse = residual.square().mean(dim=1)  # [N]
+
+    if auxk_tracker is None:
+        return mse
+
+    with torch.no_grad():
+        auxk_tracker.update(codes.detach())
+
+        dead_mask = auxk_tracker.get_dead_mask()  # [C] bool
+        if dead_mask.sum() == 0:
+            return mse
+
+    pre_codes = torch.relu(pre_codes)
+    pre_codes_dead = pre_codes[:, dead_mask]
+    dict_dead = dictionary[dead_mask]  # [C_dead, D]
+
+    if pre_codes_dead.shape[1] == 0:
+        return mse
+
+    k = min(k_aux, pre_codes_dead.shape[1])
+    if k <= 0:
+        return mse
+
+    aux_vals, aux_idx = torch.topk(pre_codes_dead, k=k, dim=1)  # [N, k]
+
+    z_aux_dead = torch.zeros_like(pre_codes_dead)
+    z_aux_dead.scatter_(1, aux_idx, aux_vals)
+
+    residual_hat = z_aux_dead @ dict_dead
+
+    if aggregate_batch:
+        aux_mse = (residual - residual_hat).square().mean()
+    else:
+        aux_mse = (residual - residual_hat).square().mean(dim=1)
+
+    return mse + penalty * aux_mse

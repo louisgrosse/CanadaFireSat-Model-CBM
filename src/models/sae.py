@@ -14,7 +14,7 @@ from overcomplete.sae.archetypal_dictionary import RelaxedArchetypalDictionary
 
 
 from src.utils.sae_utils import criterion_factory, optimizer_factory, scheduler_factory, mse_criterion,\
-    region_mse_bands_per_class, region_r2_bands_per_class
+    region_mse_bands_per_class, region_r2_bands_per_class,AuxKDeadTracker
 
 
 class plSAE(pl.LightningModule):
@@ -41,6 +41,16 @@ class plSAE(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters(logger=False)
         self.net = self.sae_factory(sae_type, **sae_kwargs)
+
+        if loss_type == "mse_auxk_true":
+            n_features = self.net.get_dictionary().shape[0]
+            self.auxk_tracker = AuxKDeadTracker(n_features)
+            criterion_kwargs = dict(criterion_kwargs)
+            criterion_kwargs.setdefault("auxk_tracker", self.auxk_tracker)
+
+        else:
+            self.auxk_tracker = None
+
         self.criterion = criterion_factory(loss_type, **criterion_kwargs)
         
         self.geonet = None
@@ -48,6 +58,13 @@ class plSAE(pl.LightningModule):
         self.train_dead_tracker = None
         self.val_dead_tracker = None
         self.test_dead_tracker = None
+
+        self.from_msclip = False
+        self.msclip_model = None
+
+        self.align_text_embs = None
+        self.align_loss_coeff = self.hparams.criterion_kwargs.get("align_loss_coeff", 0.0)
+
 
         if bind_init:
             print("Binding the encoder and decoder weights")
@@ -85,11 +102,41 @@ class plSAE(pl.LightningModule):
     def step(self, batch: Any, tracker: Any, flag_mse: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         x = batch["inputs"]
 
+        if self.from_msclip:
+                if x.ndim == 4:
+                    x = x.unsqueeze(1) 
+                    
+        if x.ndim == 5:
+            assert self.from_msclip and (self.msclip_model is not None), \
+                "plSAE.from_msclip=True and a msclip_model must be attached for 5D inputs"
+
+            B, T, C, H, W = x.shape
+
+            with torch.no_grad():
+                patch_feats = self.msclip_model.encode_patches(x)   # [B, T, P, D]
+
+            B, T, P, D = patch_feats.shape
+            H_p = self.msclip_model.H_patch
+            W_p = self.msclip_model.W_patch
+            assert P == H_p * W_p, f"num_patches mismatch: P={P}, H_p*W_p={H_p*W_p}"
+
+            # [B, T, P, D] -> [B*T, D, H_p, W_p]
+            patch_feats = patch_feats.view(B, T, H_p, W_p, D)       # [B, T, H_p, W_p, D]
+            x = patch_feats.view(B * T, H_p, W_p, D).permute(0, 3, 1, 2).contiguous()
+            # x: [B*T, D, H_p, W_p]
+
+        elif x.ndim == 4:
+            # Old path: we already have [B, D, H, W] activations
+            pass
+        else:
+            raise ValueError(f"Unexpected input shape {tuple(x.shape)}, expected 4D or 5D.")
+
         B, D, H, W = x.shape
 
+        # Flatten spatially to tokens [B*H*W, D]
         x = x.permute(0, 2, 3, 1).contiguous().view(B * H * W, D)
-
         x = x.float()
+
         
         #x = (x - x.mean(dim=0, keepdim=True)) / (x.std(dim=0, unbiased=False, keepdim=True) + 1e-6)
 
@@ -97,6 +144,16 @@ class plSAE(pl.LightningModule):
         
         z_pre, z, x_hat = self.net(x)
         loss = self.criterion(x, x_hat, z_pre, z, self.net.get_dictionary())
+
+        # --- optional concept/text alignment term ---
+        if getattr(self, "align_text_embs", None) is not None and getattr(self, "align_loss_coeff", 0.0) > 0:
+            D = self.net.get_dictionary()                          # [C, D]
+            D = torch.nn.functional.normalize(D, dim=1)
+            T = torch.nn.functional.normalize(self.align_text_embs.to(D.device).float(), dim=1)  # [N, D]
+            sims = D @ T.t()                                       # [C, N]
+            top1 = sims.max(dim=1).values                          # [C]
+            loss = loss - self.align_loss_coeff * top1.mean()      
+
 
         if self.hparams.bias_fire:
             print("==============> bias fire")
@@ -132,7 +189,7 @@ class plSAE(pl.LightningModule):
             self.log("train/resampled_codes", 1, prog_bar=True)
 
         if self.hparams.decay_k:
-            start_K, end_K, T = 64, 4, 15  # decay to 4 over 15 epochs
+            start_K, end_K, T = 16, 4, 35  # decay to 4 over 15 epochs
             K = max(end_K, start_K - (self.current_epoch * (start_K-end_K)//T))
             self.net.top_k = int(K)
 
@@ -153,7 +210,7 @@ class plSAE(pl.LightningModule):
         dead_ratio = self.train_dead_tracker.get_dead_ratio()
         print(f"Dead Train Ratio {dead_ratio}")
         self.log("train/dead_features", dead_ratio, prog_bar=True)
-        # self.train_dead_tracker = None
+        #self.train_dead_tracker = None
 
     def on_validation_epoch_start(self):
         self.val_dead_tracker = DeadCodeTracker(self.net.get_dictionary().shape[0], self.device)
@@ -194,6 +251,7 @@ class plSAE(pl.LightningModule):
         dead_ratio = self.val_dead_tracker.get_dead_ratio()
         print(f"Dead Val Ratio {dead_ratio}")
         self.log("val/dead_features", dead_ratio, prog_bar=True)
+        self.val_alive_mask = self.val_dead_tracker.alive_features.detach().clone()
         self.val_dead_tracker = None
 
     def on_test_epoch_start(self):
