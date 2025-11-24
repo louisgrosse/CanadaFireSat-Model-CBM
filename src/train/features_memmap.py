@@ -76,11 +76,19 @@ def prehead_forward(model: torch.nn.Module, x: torch.Tensor, doy: Optional[torch
 
 
 @torch.no_grad()
-def prehead_forward(model: torch.nn.Module, x: torch.Tensor, doy: Optional[torch.Tensor] = None) -> torch.Tensor:
-# [B, T, C, H, W]
+def prehead_forward(model: torch.nn.Module, x: torch.Tensor, doy: Optional[torch.Tensor] = None,seq_len = None) -> torch.Tensor:
+    # [B, T, C, H, W]
+    assert x.ndim == 5, f"inputs must be [B,T,C,H,W], got {x.ndim} dims"
     B, T, C, H, W = x.shape
+    assert C == model.channels, f"channels mismatch: got {C}, expected {model.channels}"
 
     x = x.reshape(B * T, C, H, W)
+
+    t_idx = torch.arange(T, device=x.device).unsqueeze(0)      # [1,T]
+    valid_BT  = t_idx < seq_len.unsqueeze(1).to(x.device)                       # [B,T] True=valid
+    P = model.num_patches
+    valid_BPT = valid_BT.unsqueeze(1).expand(-1, P, -1)            # [B,P,T]
+    valid_mask = valid_BPT.reshape(B * P, T)                       # [B*P,T]
 
     # Encoder
     pooled_feats, patch_feats = model.msclip_model.image_encoder(x)  # pooled_feats: [B*T, 512], patch_feats: [B*T, P, 768]
@@ -96,10 +104,13 @@ def prehead_forward(model: torch.nn.Module, x: torch.Tensor, doy: Optional[torch
         assert doy.shape == (B, T), f"DOY must be [B,T], got {tuple(doy.shape)}"
         d = model.doy_embed_mix(doy).unsqueeze(1).expand(-1, model.num_patches, -1, -1) \
                                 .reshape(B * model.num_patches, T, model.mix_dim)
-        doy_mix = d
+        doy_mix = d 
 
     # Temporal mixing in 768
-    mix_out = model.temporal_mixer(patch_feats, doy_emb=doy_mix)                    # [B*P, T, 768]
+    if model.use_mixer:
+        mix_out = model.temporal_mixer(patch_feats, doy_emb=doy_mix, mask = (~valid_mask))                    # [B*P, T, 768]
+    else:
+        mix_out = patch_feats
 
     if model.ABMIL:
         proj_seq = model.vision.ln_post(mix_out)                                    # [B*P, T, 768]
@@ -111,19 +122,22 @@ def prehead_forward(model: torch.nn.Module, x: torch.Tensor, doy: Optional[torch
                                     .reshape(B * model.num_patches, T, model.embed_dim)
             doy_pool = d
 
-        patch_vec = model.temp_enc(proj_seq, doy_emb=doy_pool)                      # [B*P, 512]
+        patch_vec = model.temp_enc(proj_seq, doy_emb=doy_pool, mask = valid_mask)                      # [B*P, 512]
     else:
-        last_768  = mix_out[:, -1, :]                                              # [B*P, 768]
-        last_768  = model.vision.ln_post(last_768)                                  # [B*P, 768]
-        patch_vec = last_768 @ model.vision.proj                                     # [B*P, 512]
+        last_idx  = (seq_len - 1).clamp_min(0)                      # [B]
+        idx_bp    = last_idx.unsqueeze(1).expand(B, P).reshape(B*P) # [B*P]
+        row_ids   = torch.arange(B*P, device=mix_out.device)
+        last_768  = mix_out[row_ids, idx_bp, :]                     # [B*P,768]
+        last_768  = model.vision.ln_post(last_768)
+        patch_vec = last_768 @ model.vision.proj                     # [B*P,512]
 
     # [B*P, 512] -> [B, P, 512]
     patch_feats = patch_vec.view(B, model.num_patches, model.embed_dim)
 
     if model.use_cls_fusion and model.has_cls_token:
         cls_feats = pooled_feats.view(B, T, model.embed_dim)                         # [B, T, 512]
-        cls_feats = model.cls_temp_enc(cls_feats)                                    # [B, 512]
-        patch_feats = patch_feats + cls_feats.unsqueeze(1)                          # broadcast over patches
+        cls_feats = model.cls_temp_enc(cls_feats,mask = valid_BT)                      # [B, 512]
+        patch_feats = patch_feats + cls_feats.unsqueeze(1)                          
 
     # [B, P, 512] -> [B, 512, H_p, W_p]
     patch_feats = patch_feats.view(B, model.H_patch, model.W_patch, model.embed_dim) \
@@ -145,7 +159,7 @@ def _first_batch_shapes(dataloader, model, device):
                 doy = doy[..., 0] 
             doy = doy.float().mean(dim=(2,3))
         doy = doy.to(device, non_blocking=True)
-    feats = prehead_forward(model.model, x, doy)  # [B,D,Hp,Wp]
+    feats = prehead_forward(model.model, x, doy, seq_len = b0["seq_lengths"])  # [B,D,Hp,Wp]
     _, D, Hp, Wp = feats.shape
     return D, Hp, Wp
 
@@ -177,7 +191,7 @@ def _open_mm(path: Path, shape, dtype="float32"):
     return open_memmap(str(path), mode="w+", dtype=dtype, shape=shape)
 
 
-@hydra.main(version_base=None, config_path="/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_fusedCLS/")
+@hydra.main(version_base=None, config_path="/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-ClearCLIP_mixer/")
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_container(cfg, resolve=True)
 
@@ -221,11 +235,11 @@ def main(cfg: DictConfig):
             doy = batch.get("doy", None)
             if doy is not None:
                 doy = doy.to(device, non_blocking=True) 
-            feats = prehead_forward(model.model, x, doy)  # [B,D,Hp,Wp]
+            feats = prehead_forward(model.model, x, doy,seq_len= batch["seq_lengths"])  # [B,D,Hp,Wp]
             B = feats.shape[0]
             out = feats.half().cpu().numpy() if dtype == "float16" else feats.float().cpu().numpy()
             feats_mm[cursor:cursor + B] = out
-            lbl_small = torch.nn.functional.interpolate(batch["labels"].permute(0,3,1,2).float(), size=feats.shape[-2:], mode="nearest").squeeze(1)
+            lbl_small = torch.nn.functional.interpolate(batch["labels"].float(), size=feats.shape[-2:], mode="nearest").squeeze(1)
             labels_mm[cursor:cursor+B] = lbl_small.cpu().numpy().astype(np.uint8)
 
 

@@ -137,7 +137,6 @@ def Canada_segmentation_transform(
             Concat(concat_keys=["10x", "20x", "60x"]),  # Order is important for RGB weights
             ReorderBands(MSCLIP_ORDER_10),
             Normalize(mean=mean_array, std=std_array),
-            transforms.Lambda(partial(multiply_inputs, factor=0)),
         ]
 
     # Regularization Image Transforms
@@ -189,8 +188,7 @@ def Canada_segmentation_transform(
         if with_doy:
             img_transform_list.append(TileDates(
                 H=model_config["img_res"], 
-                W=model_config["img_res"], 
-                max_seq_len=model_config["train_max_seq_len"] if is_training else model_config.get("val_max_seq_len", None)
+                W=model_config["img_res"]
                 )
             )   
         
@@ -229,8 +227,7 @@ def Canada_segmentation_transform(
         if with_doy:
             img_transform_list.append(TileDates(
                 H=model_config["img_res"], 
-                W=model_config["img_res"], 
-                max_seq_len=model_config["train_max_seq_len"] if is_training else model_config.get("val_max_seq_len", None)
+                W=model_config["img_res"]
                 )
             )
 

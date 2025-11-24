@@ -55,6 +55,7 @@ class ImgModule(LightningModule):
         # --- ABMIL validation logging (flags) ---
         self.log_abmil = bool(config["MODEL"].get("log_abmil", False))
         self.log_abmil_fold_mixer = bool(config["MODEL"].get("log_abmil_fold_mixer", True))
+        self.use_mixer = bool(config["MODEL"].get("use_mixer", True))
         self.abmil_fire_class_id = int(config["MODEL"].get("fire_class_id", 1))
 
         # --- accumulators (overall + per-class) ---
@@ -95,9 +96,9 @@ class ImgModule(LightningModule):
             return L1C2L2AAdapterModel(**model_config)
         raise NameError(f"Model architecture {model_config['architecture']} not found")
 
-    def forward(self, x: torch.Tensor,doy:None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor,doy:None,seq_len:None) -> torch.Tensor:
         """Forward call for the module"""
-        return self.model(x,doy)
+        return self.model(x,doy,seq_len)
 
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
         """Step for training"""
@@ -115,7 +116,7 @@ class ImgModule(LightningModule):
             self.log("train_class_loss", class_loss, on_step=True, on_epoch=False, prog_bar=True, logger=True)
             self.log("alpha", alpha, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         else:
-            outputs = self.model(batch["inputs"],batch["doy"])
+            outputs = self.model(batch["inputs"],batch["doy"],batch["seq_lengths"] )
             seg_weight = 1
 
         outputs = outputs.permute(0, 2, 3, 1)
@@ -160,7 +161,7 @@ class ImgModule(LightningModule):
             loss += alpha * class_loss
             seg_weight = 1 - alpha
         else:
-            logits = self.model(batch["inputs"],batch["doy"])
+            logits = self.model(batch["inputs"],batch["doy"],batch["seq_lengths"])
             seg_weight = 1
             class_loss = torch.tensor(0)
 
@@ -231,7 +232,7 @@ class ImgModule(LightningModule):
             doy_days = (doy_bp * 365.0).to(torch.float64)
 
             # 3) Optional: fold mixer attention for frame-level attribution
-            if self.log_abmil_fold_mixer:
+            if self.log_abmil_fold_mixer and self.use_mixer:
                 A = self.model.temporal_mixer.last_attn  # [B*P, T, T] (float32)
                 I = torch.eye(T, device=A.device, dtype=A.dtype).unsqueeze(0)
                 A_aug   = A + I

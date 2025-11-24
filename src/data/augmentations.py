@@ -651,7 +651,7 @@ class ToTHWC(object):
     items out : inputs, unk_masks, labels
     """
 
-    def __call__(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def __call__(Felf, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         x = sample["inputs"]
         if x.ndim == 4: 
             if x.shape[1] in (224, 256): 
@@ -662,8 +662,8 @@ class ToTHWC(object):
                 x = x.permute(0, 1, 4, 2, 3).contiguous()  # [B,T,H,W,C] → [B,T,C,H,W]
         sample["inputs"] = x
         
-        sample["labels"] = sample["labels"].permute(1, 2, 0)
-        sample["unk_masks"] = sample["unk_masks"].permute(1, 2, 0)
+        #sample["labels"] = sample["labels"].permute(1, 2, 0)
+        #sample["unk_masks"] = sample["unk_masks"].permute(1, 2, 0)
         return sample
 
 
@@ -802,7 +802,8 @@ class CutOrPad(object):
 
         if self.mode == "image":
             seq_len = deepcopy(sample["inputs"].shape[0])
-            sample["inputs"] = self.pad_or_cut(sample["inputs"])
+            sample["inputs"],sample["doy"] = self.pad_or_cut(sample)
+
             if "inputs_backward" in sample:
                 sample["inputs_backward"] = self.pad_or_cut(sample["inputs_backward"])
             if seq_len > self.max_seq_len:
@@ -823,18 +824,27 @@ class CutOrPad(object):
         
         return sample
 
-    def pad_or_cut(self, tensor: torch.Tensor, mask_tensor: torch.Tensor = None, dtype=torch.float32) -> Tuple[torch.Tensor]:
+    def pad_or_cut(self, sample: dict, mask_tensor: torch.Tensor = None, dtype=torch.float32) -> Tuple[torch.Tensor]:
         """Pad or Cut the input tensor to the target size"""
+        tensor = sample["inputs"]
+        tensorDoy = sample["doy"]
         seq_len = tensor.shape[0]
         diff = self.max_seq_len - seq_len
         if diff > 0:
             tsize = list(tensor.shape)
+            tsizeDoy = list(tensorDoy.shape)
             if len(tsize) == 1:
                 pad_shape = [diff]
+                pad_shapeDoy = [diff]
             else:
                 pad_shape = [diff] + tsize[1:]
+                pad_shapeDoy = [diff] + tsizeDoy[1:]
             tensor = torch.cat(
                 (tensor, torch.zeros(pad_shape, dtype=dtype)), dim=0
+            )
+            #print("=============>",diff, pad_shape, tensorDoy.shape, tensor.shape)
+            tensorDoy = torch.cat(
+                (tensorDoy, torch.zeros(pad_shapeDoy, dtype=dtype)), dim=0
             )
             mask_tensor = (
                 torch.cat((mask_tensor, torch.zeros(pad_shape, dtype=dtype)), dim=0)
@@ -845,13 +855,16 @@ class CutOrPad(object):
             if self.sampling_type == "random":
                 random_idx = self.random_subseq(seq_len)
                 tensor = tensor[random_idx]
+                tensorDoy = tensorDoy[random_idx]
                 mask_tensor = mask_tensor[random_idx] if mask_tensor is not None else None
             elif self.sampling_type == "start":
                 tensor = tensor[-self.max_seq_len :]
+                tensorDoy = tensorDoy[-self.max_seq_len :]
                 mask_tensor = mask_tensor[-self.max_seq_len :] if mask_tensor is not None else None
             elif self.sampling_type == "uniform":
                 uni_idx = self.uniform_subseq(seq_len)
                 tensor = tensor[uni_idx]
+                tensorDoy = tensorDoy[uni_idx]
                 mask_tensor = mask_tensor[uni_idx] if mask_tensor is not None else None
             else:
                 start_idx = torch.randint(seq_len - self.max_seq_len, (1,))[0]
@@ -861,10 +874,10 @@ class CutOrPad(object):
                 )
 
         if mask_tensor is None:
-            return tensor
+            return tensor, tensorDoy
 
         else:
-            return tensor, mask_tensor
+            return tensor, tensorDoy, mask_tensor
 
     def random_subseq(self, seq_len: int):
         random_integers = torch.randperm(seq_len - 1)[: self.max_seq_len - 1].sort()[0]
@@ -888,7 +901,6 @@ class CutOrPad(object):
         # Add the last index
         indices.append(seq_len - 1)
         return torch.tensor(indices, dtype=torch.long)
-
 
 class TileLocs(object):
     """Add Loc to inputs as radian"""

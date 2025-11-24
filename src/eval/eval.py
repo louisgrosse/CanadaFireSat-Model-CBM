@@ -137,7 +137,7 @@ def evaluate(cfg: DictConfig):
                 sample = data[0]
                 img_name_info = data[1]
                 if model.model_type == 'MSClipFacto':
-                    logits = model(sample["inputs"].unsqueeze(0).to(device),sample["doy"].unsqueeze(0).to(device))
+                    logits = model(sample["inputs"].unsqueeze(0).to(device),sample["doy"].unsqueeze(0).to(device),torch.tensor([sample["seq_lengths"]]).to(device))
                 else:
                     logits = model(sample["inputs"].unsqueeze(0).to(device))
             else:
@@ -202,7 +202,7 @@ def evaluate(cfg: DictConfig):
         if unk_masks is not None:
             preds = predicted.view(-1)[unk_masks.view(-1)].cpu().numpy()
             probs = probs.view(-1, cfg["MODEL"]["num_classes"])[unk_masks.view(-1)].cpu().numpy()
-            labels = labels.view(-1)[unk_masks.view(-1)].cpu().numpy()
+            labels = labels[unk_masks.view(-1)].cpu().numpy()
         else:
             preds = predicted.view(-1).cpu().numpy()
             probs = probs.view(-1, cfg["MODEL"]["num_classes"]).cpu().numpy()

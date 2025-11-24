@@ -21,7 +21,7 @@ n_show_batches: 4                  # how many batches to visualize
 topk_words_plot: 8
 seed: 42
 # Output
-out_dir: "results/dictionnary/patch_naming_hf_clip"
+out_dir: "results/dictionnary/patch_naming_hf_sclip"
 
 sae:
   load_from_ckpt: 
@@ -41,36 +41,48 @@ MODEL:
   num_classes: 2
   channels: 10
   threshold: 0.5
-  pretrained: True
-  use_cls_fusion: false
   ds_labels: true
+  use_cls_fusion: false
   use_l1c2l2a_adapter: false
   unfreeze_last_block: false
+  ABMIL: true           # use ABMIL module  
+  use_mixer: false    
+  log_abmil: false               # turn on/off logging of ABMIL attention
+  log_abmil_fold_mixer: false    
+  fire_class_id: 1  
+  pretrained: true
   l1c2l2a_Adapter_loc: "${paths.l1c2l2a_Adapter_loc}"
   out_H: 25
   out_W: 25
-  temp_enc_type: "attention" 
-  temp_depth: 2
-  use_conv_decoder: true
+  temp_enc_type: "mixer"  #attention, mixer
   freeze_msclip: true
-  learned_query: true
   clearclip:
-    enabled: true          
+    enabled: false          
     n_last: 1
-    attn_variant: "qq"   
+    attn_variant: "qq"    
     keep_ffn: false        # should be false for ClearCLIP
     keep_residual: false   # should be false for ClearCLIP
+  sclip:
+    enabled: true
+    n_last: 1
+  denseclip:
+    enabled: false
+    class_names: ["no fire", "fire"]
+    prompt_template: "A satellite image of {}."
+    concat_scores: true
+    tau: 0.07
+
 
 SOLVER:
-  num_epochs: 30
+  num_epochs: 20
   num_warmup_epochs: 2
   loss_function: masked_dice_loss #combined_dice_ce or masked_dice_loss
   lr_scheduler: 'cosine'
-  lr_start: 1e-7
-  lr_min: 1e-7
+  lr_start: 1e-5
+  lr_min: 1e-5
   num_cycles: 1
-  lr_base: 5e-5
-  weight_decay: 0.01
+  lr_base: 3e-4
+  weight_decay: 0.001
   accumulate_grad_batches: 2
 
 DATASETS:
@@ -80,7 +92,7 @@ DATASETS:
     std_file: "${paths.bands_std}"
     with_loc: False
     with_doy: True
-    use_msclip_norm: True
+    use_msclip_norm: true
     bands: [
               "B2",
               "B3",
@@ -106,13 +118,13 @@ DATASETS:
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "MS-ClearCLIP_Fixed3"
+  experiment_name: "MS-ClearCLIP_ABMIL_V2"
   save_path: "./results/models"
   train_metrics_steps: 200 
   save_steps: 10000
   wandb_project: "${wandb.project}"
   wandb_user: "${wandb.user}"
-  group: Trained on Ontario and Alberta
+  group: V3
 
 SET-UP:
   seed: 42

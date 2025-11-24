@@ -5,7 +5,6 @@ from sklearn.cluster import MiniBatchKMeans
 import hydra
 from hydra.core.hydra_config import HydraConfig
 import pytorch_lightning as pl
-from omegaconf import DictConfig
 from pytorch_lightning import Callback, LightningDataModule, LightningModule, Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers.logger import Logger
@@ -80,6 +79,8 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
         log.info(f"Instantiating Backbone <{cfg.model.net._target_}>")
         net: nn.Module = hydra.utils.instantiate(cfg.model.net)
 
+        net.eval()
+        
         sae.msclip_model = net
         sae.from_msclip = True
 
@@ -127,7 +128,8 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
     log.info(f"Instantiating trainer <{cfg.trainer_sae._target_}>")
     trainer_sae: Trainer = hydra.utils.instantiate(cfg.trainer_sae, callbacks=callbacks, logger=[wandb_logger])
 
-    datamodule.setup()
+    if not cfg["model"]["net"]["from_msclip"]:
+        datamodule.setup()
     
     act_datamodule = None
     if not cfg["model"]["net"]["from_msclip"]:
@@ -157,12 +159,14 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
     else:
         trainer_sae.fit(model=sae, datamodule=datamodule)
 
-
+    ckpt_dir = callbacks_cfg[0]["dirpath"]
     align = cfg.get("ALIGN")
     if align is not None and align.get("csv_phrases_path") and align["enabled"]:
         device = str(align.get("device", "cuda"))
         columns = ["dict", "mean", "std", "N", "max"]
+        columnsBis = []
         data = []
+        dataBis = []
         dataNames = []
 
         for csv_name in tqdm(align["csv_names"]):
@@ -180,13 +184,15 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
                 device=device,
             )  # [N, Dt]
 
-            mean_c, std_c, max_c, top_rows = _alignment_stats_and_topk(
+            mean_c, std_c, max_c, top_rows, top1_vals = _alignment_stats_and_topk(
                 sae_module=sae,
                 text_embs=text_embs,
                 device=device,
                 phrases=phrases,
                 k=5,
                 name = csv_name,
+                ckpt_dir= ckpt_dir,
+                csv_name = csv_name,
             )
 
             max_v = float(max_c)
@@ -195,16 +201,22 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
             data.append([csv_name, mean, std, len(phrases), max_v])
             print(f"[ALIGN] top1 cosine — mean={mean_c:.4f}, std={std_c:.4f} {csv_name}")
 
+            columnsBis.append(csv_name)
+            dataBis.append(top1_vals.cpu())
+
             wandb_logger.log_table(
                 key=f"dictionnary_{csv_name}",
                 columns=["rank", "concept", "best_sae_concept_id", "cosine"],
                 data=top_rows,
             )
-
+        print("dataBis = ", len(dataBis), dataBis)
+        print("test: ",len(dataBis[0]))
+        print("columnsBis = ", columnsBis)
+        dataBis_arr = np.stack(dataBis, axis=1)
+        wandb_logger.log_table(key="CosineDistribution",columns = columnsBis  ,data=dataBis_arr.tolist())
         wandb_logger.log_table(key="alignment", columns=columns, data=data)
+        print("Logged all 8 tables successfully.")
 
-
-    ckpt_dir = callbacks_cfg[0]["dirpath"]
     OmegaConf.save(cfg, os.path.join(ckpt_dir, "config.yaml"))
 
     # Test the SAE
@@ -341,9 +353,8 @@ def _encode_phrases_msclip(phrases, model, tokenizer, batch_size, device):
     return torch.cat(embs, dim=0)               # [N, Dt]
 
 @torch.no_grad()
-def _alignment_stats_and_topk(sae_module, text_embs, device: str, phrases, k: int = 5,name:str = None):
-    alive_mask = sae_module.val_alive_mask 
-    print("=============> Alive ?", alive_mask.shape)
+def _alignment_stats_and_topk(sae_module, text_embs, device: str, phrases, k: int = 5,name:str = None, ckpt_dir:str = None,csv_name:str = None):
+    alive_mask = ~sae_module.auxk_tracker.get_dead_mask()
 
     D = sae_module.net.get_dictionary().to(device).float()
     D = F.normalize(D, dim=1)
@@ -360,6 +371,7 @@ def _alignment_stats_and_topk(sae_module, text_embs, device: str, phrases, k: in
     mean_c = top1_concept_vals.mean().item()
     std_c  = top1_concept_vals.std(unbiased=False).item()
     max_c  = top1_concept_vals.max().item()
+    median_c = top1_concept_vals.median().item()
 
     phrase_best_vals, phrase_best_concepts = sims.max(dim=0)      # [N], [N]
     k = min(k, phrase_best_vals.numel())
@@ -369,7 +381,7 @@ def _alignment_stats_and_topk(sae_module, text_embs, device: str, phrases, k: in
     for rank, (pidx, val) in enumerate(zip(top_phrase_idx.tolist(), top_vals.tolist()), start=1):
         top_rows.append([rank, phrases[pidx], int(phrase_best_concepts[pidx].item()), float(val)])
 
-    return mean_c, std_c, max_c, top_rows
+    return mean_c, std_c, max_c, top_rows, top1_concept_vals
 
 
 @hydra.main(version_base="1.2", config_path=str(CONFIG_PATH), config_name="sae_config.yaml")

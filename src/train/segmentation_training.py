@@ -16,6 +16,8 @@ from src.data import get_data
 from src.data.Canada.callback import FWICallback, WeightLossCallback, SwitchAllCallback
 from src.models import get_model
 from src.utils.torch_utils import load_from_checkpoint
+from tqdm import tqdm
+from collections import Counter
 
 sys.path.insert(0, os.getcwd())
 
@@ -219,6 +221,38 @@ def train_and_evaluate(cfg: DictConfig):
     # Copy the config file to the save_path and wandb
     copy_yaml(cfg)
     wandb_logger.log_hyperparams(cfg)
+
+    print("test1")
+    if False:   
+        running_counts = Counter()
+        for batch in tqdm(datamodule.train_dataloader()):
+            doy = batch["doy"]
+            doy = doy[:,:,0,0,0].int().view(-1)
+
+            vals, counts = torch.unique(doy, return_counts=True)
+
+            running_counts.update(dict(zip(vals.tolist(), counts.tolist())))
+
+        for batch in tqdm(datamodule.val_dataloader()):
+            doy = batch["doy"]
+            doy = doy[:,:,0,0,0].int().view(-1)
+
+            vals, counts = torch.unique(doy, return_counts=True)
+
+            running_counts.update(dict(zip(vals.tolist(), counts.tolist())))
+        
+        for batch in tqdm(datamodule.test_dataloader()):
+            doy = batch[0]["doy"]
+            doy = doy[:,:,0,0,0].int().view(-1)
+
+            vals, counts = torch.unique(doy, return_counts=True)
+
+            running_counts.update(dict(zip(vals.tolist(), counts.tolist())))
+        
+        print(running_counts)
+        sys.exit(0)
+
+    print("test2")
 
     # Set-up Trainer
     trainer = Trainer(

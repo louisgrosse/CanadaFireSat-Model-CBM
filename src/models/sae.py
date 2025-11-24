@@ -35,6 +35,7 @@ class plSAE(pl.LightningModule):
             geo_embed_dim: int = 256,
             bias_fire: bool = False,
             decay_k: bool= False,
+            align_start_epoch: int= 40,
             sae_kwargs: Dict[str, Any] = {},
             criterion_kwargs: Dict[str, Any] = {},
     ):
@@ -105,6 +106,7 @@ class plSAE(pl.LightningModule):
         if self.from_msclip:
                 if x.ndim == 4:
                     x = x.unsqueeze(1) 
+                
                     
         if x.ndim == 5:
             assert self.from_msclip and (self.msclip_model is not None), \
@@ -120,10 +122,16 @@ class plSAE(pl.LightningModule):
             W_p = self.msclip_model.W_patch
             assert P == H_p * W_p, f"num_patches mismatch: P={P}, H_p*W_p={H_p*W_p}"
 
-            # [B, T, P, D] -> [B*T, D, H_p, W_p]
-            patch_feats = patch_feats.view(B, T, H_p, W_p, D)       # [B, T, H_p, W_p, D]
-            x = patch_feats.view(B * T, H_p, W_p, D).permute(0, 3, 1, 2).contiguous()
-            # x: [B*T, D, H_p, W_p]
+            seq_len = batch["seq_lengths"]
+            t_idx = torch.arange(T, device=batch["inputs"].device).unsqueeze(0)      # [1,T]
+            valid_BT  = t_idx < seq_len.unsqueeze(1)                       # [B,T] True=valid
+            P = self.msclip_model.num_patches
+            valid_BPT = valid_BT.unsqueeze(1).expand(-1, P, -1)            # [B,P,T]
+            patch_feats = patch_feats[valid_BPT[:,0,:],:,:]
+            B, _,_ = patch_feats.shape
+
+            # [B*T, P, D] -> [B*T, D, H_p, W_p]
+            x = patch_feats.view(B, H_p, W_p, D).permute(0, 3, 1, 2).contiguous()
 
         elif x.ndim == 4:
             # Old path: we already have [B, D, H, W] activations
@@ -146,7 +154,7 @@ class plSAE(pl.LightningModule):
         loss = self.criterion(x, x_hat, z_pre, z, self.net.get_dictionary())
 
         # --- optional concept/text alignment term ---
-        if getattr(self, "align_text_embs", None) is not None and getattr(self, "align_loss_coeff", 0.0) > 0:
+        if getattr(self, "align_text_embs", None) is not None and getattr(self, "align_loss_coeff", 0.0) > 0 and self.current_epoch >= self.hparams.align_start_epoch:
             D = self.net.get_dictionary()                          # [C, D]
             D = torch.nn.functional.normalize(D, dim=1)
             T = torch.nn.functional.normalize(self.align_text_embs.to(D.device).float(), dim=1)  # [N, D]
@@ -156,7 +164,6 @@ class plSAE(pl.LightningModule):
 
 
         if self.hparams.bias_fire:
-            print("==============> bias fire")
             m = None
             lbl = batch["label"]
             lbl = lbl.squeeze(1) if lbl.ndim==4 else lbl

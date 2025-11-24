@@ -27,6 +27,7 @@ from src.data.Canada.data_transforms import Canada_segmentation_transform, MSCLI
 sys.path.append('MS-CLIP')
 from msclip.inference.utils import build_model
 from msclip.inference.clearclip import maybe_patch_clearclip
+from msclip.inference.sclip import maybe_patch_sclip
 
 @torch.no_grad()
 def prehead_forward_sae(model: torch.nn.Module, x: torch.Tensor, doy: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -157,7 +158,7 @@ def _binarize_labels(y, x=None):
     # otherwise we don't know how to interpret
     return None
 
-def _get_positive_indices(batch, min_pos_frac=0.001):
+def _get_positive_indices(batch, min_pos_frac=0.5):
     """
     Returns list of indices within this batch that are 'positive'.
     Positive == label mask >0.5 occupies >= min_pos_frac of pixels.
@@ -193,6 +194,8 @@ def assign_labels_to_patches(patch_embs: torch.Tensor, text_embs: torch.Tensor, 
       scores: [B,P,topk]  cosine sim of top phrases
       idx:    [B,P,topk]  indices into text_embs / phrases
     """
+    patch_embs = F.normalize(patch_embs, dim=-1)
+    text_embs = F.normalize(text_embs, dim=-1)
     if patch_embs.ndim == 2:
         # treat as [B,D] -> make P=1
         patch_embs = patch_embs.unsqueeze(1)  # [B,1,D]
@@ -203,9 +206,6 @@ def assign_labels_to_patches(patch_embs: torch.Tensor, text_embs: torch.Tensor, 
     # [B,P,D] -> [B*P,D]
     flat = patch_embs.reshape(B * P, D)  # [BP,D]
 
-
-    print("patchs_flat:", flat.shape, " and text_embs:", text_embs.shape)
-    sys.exit(0)
     # [BP,N] similarities
     sims_flat = flat @ text_embs.t()     # both already L2-normalized so this is cosine
 
@@ -651,11 +651,17 @@ def main(cfg: DictConfig):
     image_encoder = model.image_encoder
     model_config = cfg["MODEL"]
     if model_config is not None and "clearclip" in model_config and model_config["clearclip"]["enabled"]:
-        num_patched = maybe_patch_clearclip(image_encoder, model_config["clearclip"])
+        num_patched = maybe_patch_clearclip(model, model_config["clearclip"])
         if num_patched > 0:
             print(f"[ClearCLIP] Patched last {num_patched} vision blocks "
                 f"(keep_ffn={model_config['clearclip'].get('keep_ffn', False)}, "
                 f"keep_residual={model_config['clearclip'].get('keep_residual', False)})")
+
+    if model_config is not None and "sclip" in model_config and model_config["sclip"]["enabled"]:
+        num_patched = maybe_patch_sclip(model.image_encoder, model_config["sclip"])
+        if num_patched > 0:
+            print(f"[SCLIP] Patched last {num_patched} vision blocks "
+                    f"(CSA attention)")
 
     for bi, batch in enumerate(tqdm(loader)):
         # batch[0] is the dict with "inputs" (and labels, etc.)
@@ -666,20 +672,13 @@ def main(cfg: DictConfig):
         patch_tokens_over_time = []
         pooled_over_time = []
 
-        for t in range(T):
-            X = x[:, t]                    # [B,C,H,W]
-            pool, ptoks = model.image_encoder(X)
-            ptoks = vision.ln_post(ptoks)      # [B*T, P, 768] -> LN
-            ptoks = ptoks @ vision.proj
-            pooled_over_time.append(pool)
-            patch_tokens_over_time.append(ptoks)
-
-
-        ptoks_raw_avg = torch.stack(patch_tokens_over_time, dim=0).mean(dim=0)
-        pool_avg = torch.stack(pooled_over_time, dim=0).mean(dim=0)
+        X = x[:, 0]                    # [B,C,H,W]
+        pool, ptoks = model.image_encoder(X)
+        ptoks = vision.ln_post(ptoks)      # [B*T, P, 768] -> LN
+        ptoks = ptoks @ vision.proj
 
         # cosine sim to all phrases, per patch
-        scores, idx = assign_labels_to_patches(ptoks_proj, text_embs, topk=1)
+        scores, idx = assign_labels_to_patches(ptoks, text_embs, topk=1)
         # idx:    [B,P,1] → squeeze to [B,P]
         # scores: [B,P,1] → squeeze to [B,P]
         top1 = idx.squeeze(-1)
@@ -701,7 +700,7 @@ def main(cfg: DictConfig):
                     global_sim_max[k] = sim_val
 
         # --- positive filtering for visualization ---
-        pos_idx_list = _get_positive_indices(batch[0], min_pos_frac=0.001)
+        pos_idx_list = _get_positive_indices(batch[0], min_pos_frac=0.3)
 
         # safety stop condition you added
         if plotted_batches > cfg["n_show_batches"]:
@@ -712,11 +711,12 @@ def main(cfg: DictConfig):
             # slice to positives only
             x_pos    = x[pos_idx_list]        # [Bpos,T,C,H,W]
             top1_pos = top1[pos_idx_list]     # [Bpos,P]
+            print("============>", top1_pos)
 
             # get binarized GT label mask at coarse resolution
             # NOTE: your dataloader stores labels in batch[0]["labels"], shape [B,Hc,Wc,C?] or similar
             # you used .permute(0,3,1,2) earlier, so let's keep that
-            y_full = batch[0]["labels"].permute(0,3,1,2)
+            y_full = batch[0]["labels"]
             y_bin  = _binarize_labels(y_full, batch[0]["inputs"])  # -> [B,1,Hc,Wc] or None
 
             if y_bin is not None:
