@@ -5,7 +5,7 @@ defaults:
 MODEL:
   architecture: "MSClipFacto"
   msclip_model_name: "Llama3-MS-CLIP-Base"
-  msclip_ckpt: ""        # or path to local ckpt; leave empty to use HF download configured in build_model
+  msclip_ckpt: ""       # or path to local ckpt; leave empty to use HF download configured in build_model
   input_img_res: 264
   img_res: 224
   train_max_seq_len: 5
@@ -20,7 +20,9 @@ MODEL:
   use_cls_fusion: false
   use_l1c2l2a_adapter: false
   unfreeze_last_block: false
-  ABMIL: false           # use ABMIL module  
+  ABMIL: false          # use ABMIL module 
+  use_CBM: false
+  sae_config: 
   use_mixer: true    
   log_abmil: false               # turn on/off logging of ABMIL attention
   log_abmil_fold_mixer: false    
@@ -32,14 +34,16 @@ MODEL:
   temp_enc_type: "mixer"  #attention, mixer
   freeze_msclip: true
   clearclip:
-    enabled: true          
+    enabled: false          
     n_last: 1
     attn_variant: "qq"    
     keep_ffn: false        # should be false for ClearCLIP
     keep_residual: false   # should be false for ClearCLIP
   sclip:
-    enabled: false
+    enabled: true
     n_last: 1
+    keep_ffn: true   #Turn to false if you want to combine ClearCLIP and SCLIP
+    keep_residual: true
   denseclip:
     enabled: false
     class_names: ["no fire", "fire"]
@@ -53,10 +57,10 @@ SOLVER:
   num_warmup_epochs: 2
   loss_function: masked_dice_loss #combined_dice_ce or masked_dice_loss
   lr_scheduler: 'cosine'
-  lr_start: 1e-5
-  lr_min: 1e-5
+  lr_start: 1e-7
+  lr_min: 1e-7
   num_cycles: 1
-  lr_base: 3e-4
+  lr_base: 5e-6
   weight_decay: 0.001
   accumulate_grad_batches: 2
 
@@ -93,13 +97,13 @@ DATASETS:
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "MS-ClearCLIP_mixer"
+  experiment_name: "MS-SCLIP_mixer"
   save_path: "./results/models"
   train_metrics_steps: 200 
   save_steps: 10000
   wandb_project: "${wandb.project}"
   wandb_user: "${wandb.user}"
-  group: V3
+  group: V4
 
 SET-UP:
   seed: 42

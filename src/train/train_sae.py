@@ -20,6 +20,7 @@ from pytorch_lightning.loggers import WandbLogger
 import logging
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from pathlib import Path
 
 from tqdm import tqdm
 from src.models.sae import plSAE
@@ -133,7 +134,7 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
     
     act_datamodule = None
     if not cfg["model"]["net"]["from_msclip"]:
-        act_datamodule = NpyActDataModule(batch_size=cfg.sae_batch_size, train_npy_path=cfg.datamodule["train_path"], val_npy_path=cfg.datamodule["train_path"], test_npy_path=cfg.datamodule["train_path"])
+        act_datamodule = NpyActDataModule(batch_size=cfg.sae_batch_size, train_npy_path=cfg.datamodule["train_path"], val_npy_path=cfg.datamodule["val_path"], test_npy_path=cfg.datamodule["test_path"])
 
     if cfg["use_archetypal"]["enabled"]:
         if cfg["use_archetypal"]["uniform"]:
@@ -142,7 +143,14 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
         else:
             print("Using k-means to sample points")
             points = sample_points_kmeans(dl = act_datamodule.train_dataloader(),n_centers=16_000)
-            
+        
+        dirpath = Path(callbacks_cfg[0]["dirpath"])
+        dirpath.mkdir(parents=True, exist_ok=True)
+
+        points_np = points.detach().cpu().numpy()
+
+        np.save(file = Path(os.path.join(callbacks_cfg[0]["dirpath"], "archetypalPoints.npy")), arr = points_np)
+
         archetypal_dict = RelaxedArchetypalDictionary(
             in_dimensions=cfg.sae.sae_kwargs["input_shape"],
             nb_concepts=cfg.sae.sae_kwargs["nb_concepts"],
@@ -158,6 +166,21 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
         trainer_sae.fit(model=sae, datamodule=act_datamodule, ckpt_path=cfg.get("sae_ckpt_path"))
     else:
         trainer_sae.fit(model=sae, datamodule=datamodule)
+
+    # Test the SAE
+    if cfg["datamodule"]["test_path"] is not None:
+        if not cfg["model"]["net"]["from_msclip"]:
+            trainer_sae.test(
+                model=sae,
+                datamodule=act_datamodule,
+                ckpt_path="best"
+            )
+        else:
+            trainer_sae.test(
+                model=sae,
+                datamodule=datamodule,
+                ckpt_path="best"
+            )
 
     ckpt_dir = callbacks_cfg[0]["dirpath"]
     align = cfg.get("ALIGN")
@@ -184,15 +207,15 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
                 device=device,
             )  # [N, Dt]
 
-            mean_c, std_c, max_c, top_rows, top1_vals = _alignment_stats_and_topk(
+            mean_c, std_c, max_c, top1_vals, top_concept_rows = _alignment_stats_and_topk(
                 sae_module=sae,
                 text_embs=text_embs,
                 device=device,
                 phrases=phrases,
                 k=5,
-                name = csv_name,
-                ckpt_dir= ckpt_dir,
-                csv_name = csv_name,
+                name=csv_name,
+                ckpt_dir=ckpt_dir,
+                csv_name=csv_name,
             )
 
             max_v = float(max_c)
@@ -204,11 +227,18 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
             columnsBis.append(csv_name)
             dataBis.append(top1_vals.cpu())
 
+            #wandb_logger.log_table(
+            #    key=f"dictionnary_{csv_name}",
+            #    columns=["rank", "concept", "best_sae_concept_id", "cosine"],
+            #    data=top_rows,
+            #)
+
             wandb_logger.log_table(
-                key=f"dictionnary_{csv_name}",
-                columns=["rank", "concept", "best_sae_concept_id", "cosine"],
-                data=top_rows,
+                key=f"top_concepts_{csv_name}",
+                columns=["rank", "sae_concept_id", "best_phrase", "cosine"],
+                data=top_concept_rows,
             )
+
         print("dataBis = ", len(dataBis), dataBis)
         print("test: ",len(dataBis[0]))
         print("columnsBis = ", columnsBis)
@@ -217,15 +247,8 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
         wandb_logger.log_table(key="alignment", columns=columns, data=data)
         print("Logged all 8 tables successfully.")
 
+    cfg.sae_ckpt_path = callbacks_cfg[0]["dirpath"] + "/last.ckpt"
     OmegaConf.save(cfg, os.path.join(ckpt_dir, "config.yaml"))
-
-    # Test the SAE
-    if cfg["datamodule"]["test_path"] is not None:
-        trainer_sae.test(
-            model=sae,
-            datamodule=act_datamodule,
-            ckpt_path="best"
-        )
 
 
 def sample_points_uniform(n_points=16000, dl =None, cap_tokens_per_batch=4096, device="cpu"):
@@ -287,9 +310,6 @@ def sample_points_kmeans(dl=None, n_centers=16_000, cap_tokens_per_batch=8192):
                 init_buf = np.concatenate(init_chunks, axis=0)  # [n_centers, D]
                 kmeans.partial_fit(init_buf)
                 break
-    else:
-        raise ValueError(f"Only collected {n_centers - init_needed} samples < n_centers={n_centers}. "
-                         f"Lower n_centers or raise cap_tokens_per_batch.")
 
     for batch in dl:
         x = batch["inputs"]
@@ -354,7 +374,8 @@ def _encode_phrases_msclip(phrases, model, tokenizer, batch_size, device):
 
 @torch.no_grad()
 def _alignment_stats_and_topk(sae_module, text_embs, device: str, phrases, k: int = 5,name:str = None, ckpt_dir:str = None,csv_name:str = None):
-    alive_mask = ~sae_module.auxk_tracker.get_dead_mask()
+    alive_mask = sae_module.test_dead_tracker.alive_features.detach().clone()
+    #alive_mask = ~sae_module.auxk_tracker.get_dead_mask()
 
     D = sae_module.net.get_dictionary().to(device).float()
     D = F.normalize(D, dim=1)
@@ -374,14 +395,24 @@ def _alignment_stats_and_topk(sae_module, text_embs, device: str, phrases, k: in
     median_c = top1_concept_vals.median().item()
 
     phrase_best_vals, phrase_best_concepts = sims.max(dim=0)      # [N], [N]
-    k = min(k, phrase_best_vals.numel())
-    top_vals, top_phrase_idx = torch.topk(phrase_best_vals, k)    # [k], [k]
+    k_phr = min(k, phrase_best_vals.numel())
+    top_vals, top_phrase_idx = torch.topk(phrase_best_vals, k_phr)
 
-    top_rows = []
-    for rank, (pidx, val) in enumerate(zip(top_phrase_idx.tolist(), top_vals.tolist()), start=1):
-        top_rows.append([rank, phrases[pidx], int(phrase_best_concepts[pidx].item()), float(val)])
+    concept_best_vals, concept_best_phrase = sims.max(dim=1)  # [C], [C]
 
-    return mean_c, std_c, max_c, top_rows, top1_concept_vals
+    k_concepts = min(k, concept_best_vals.numel())
+    concept_top_vals, concept_idx = torch.topk(concept_best_vals, k_concepts)
+
+    top_concept_rows = []
+    for rank, (cidx, val) in enumerate(
+        zip(concept_idx.tolist(), concept_top_vals.tolist()), start=1
+    ):
+        pidx = int(concept_best_phrase[cidx].item())
+        top_concept_rows.append(
+            [rank, cidx, phrases[pidx], float(val)]
+        )
+
+    return mean_c, std_c, max_c, top1_concept_vals, top_concept_rows
 
 
 @hydra.main(version_base="1.2", config_path=str(CONFIG_PATH), config_name="sae_config.yaml")

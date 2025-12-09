@@ -12,16 +12,16 @@ split: "validation"                  # "train" | "validation" | "test" | "test_h
 
 # Dictionary
 captions_dir: "/work/eceo/grosse/dictionnary/"
-captions_glob: "concept_counts10k_spacy.csv"  # "*.parquet" or "*.csv"  'concept_countsCLIPDATASET.csv'
+captions_glob: "kmeans_10k.csv"  # "*.parquet" or "*.csv"  'concept_countsCLIPDATASET.csv'
 max_phrases:  #50000, None to take all, 
 text_batch_size: 512
 # Visualization
 rgb_bands: [2,1,0]  # (B4,B3,B2)-like indices in MS-CLIP 10-band order
-n_show_batches: 4                  # how many batches to visualize
+n_show_batches: 6                  # how many batches to visualize
 topk_words_plot: 8
 seed: 42
 # Output
-out_dir: "results/dictionnary/patch_naming_hf_sclip"
+out_dir: "results/dictionnary/patch_naming_clip_kmeans10k"
 
 sae:
   load_from_ckpt: 
@@ -30,7 +30,7 @@ sae:
 MODEL:
   architecture: "MSClipFacto"
   msclip_model_name: "Llama3-MS-CLIP-Base"
-  msclip_ckpt: ""        # or path to local ckpt; leave empty to use HF download configured in build_model
+  msclip_ckpt: ""       # or path to local ckpt; leave empty to use HF download configured in build_model
   input_img_res: 264
   img_res: 224
   train_max_seq_len: 5
@@ -45,8 +45,10 @@ MODEL:
   use_cls_fusion: false
   use_l1c2l2a_adapter: false
   unfreeze_last_block: false
-  ABMIL: true           # use ABMIL module  
-  use_mixer: false    
+  ABMIL: false          # use ABMIL module 
+  use_CBM: false
+  sae_config: 
+  use_mixer: true    
   log_abmil: false               # turn on/off logging of ABMIL attention
   log_abmil_fold_mixer: false    
   fire_class_id: 1  
@@ -63,8 +65,10 @@ MODEL:
     keep_ffn: false        # should be false for ClearCLIP
     keep_residual: false   # should be false for ClearCLIP
   sclip:
-    enabled: true
+    enabled: false
     n_last: 1
+    keep_ffn: true   #Turn to false if you want to combine ClearCLIP and SCLIP
+    keep_residual: true
   denseclip:
     enabled: false
     class_names: ["no fire", "fire"]
@@ -78,11 +82,11 @@ SOLVER:
   num_warmup_epochs: 2
   loss_function: masked_dice_loss #combined_dice_ce or masked_dice_loss
   lr_scheduler: 'cosine'
-  lr_start: 1e-5
-  lr_min: 1e-5
+  lr_start: 1e-7
+  lr_min: 1e-7
   num_cycles: 1
-  lr_base: 3e-4
-  weight_decay: 0.001
+  lr_base: 5e-5
+  weight_decay: 0.01
   accumulate_grad_batches: 2
 
 DATASETS:
@@ -114,17 +118,20 @@ DATASETS:
     data_dir: "${paths.hf_data}"
     batch_size: 24
     num_workers: 8
+  
+  test:
+    num_workers: 16
 
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "MS-ClearCLIP_ABMIL_V2"
+  experiment_name: "MS-CLIP_mixer"
   save_path: "./results/models"
   train_metrics_steps: 200 
   save_steps: 10000
   wandb_project: "${wandb.project}"
   wandb_user: "${wandb.user}"
-  group: V3
+  group: V4
 
 SET-UP:
   seed: 42

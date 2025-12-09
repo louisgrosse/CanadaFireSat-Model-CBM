@@ -108,7 +108,12 @@ def prehead_forward(model: torch.nn.Module, x: torch.Tensor, doy: Optional[torch
 
     # Temporal mixing in 768
     if model.use_mixer:
-        mix_out = model.temporal_mixer(patch_feats, doy_emb=doy_mix, mask = (~valid_mask))                    # [B*P, T, 768]
+        if model.useCBM:
+            with torch.no_grad():
+                mix_out = model.temporal_mixer(patch_feats, doy_emb=doy_mix, mask = (~valid_mask))                    # [B*P, T, 768]
+        else:
+            mix_out = model.temporal_mixer(patch_feats, doy_emb=doy_mix, mask = (~valid_mask))                    # [B*P, T, 768]
+
     else:
         mix_out = patch_feats
 
@@ -191,7 +196,7 @@ def _open_mm(path: Path, shape, dtype="float32"):
     return open_memmap(str(path), mode="w+", dtype=dtype, shape=shape)
 
 
-@hydra.main(version_base=None, config_path="/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-ClearCLIP_mixer/")
+@hydra.main(version_base=None, config_path="/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_mixer/")
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_container(cfg, resolve=True)
 

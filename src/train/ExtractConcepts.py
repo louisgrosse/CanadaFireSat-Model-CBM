@@ -10,7 +10,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_ROWS = 100000        
 MIN_COUNT = 5            
-TOP_N = 50000            
+TOP_N = 10000            
 print("Loading parquet...")
 
 

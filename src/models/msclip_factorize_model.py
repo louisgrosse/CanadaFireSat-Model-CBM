@@ -5,6 +5,9 @@ import torch.nn.functional as F
 import sys
 from typing import Any, Dict
 from omegaconf import DictConfig, OmegaConf
+import numpy as np
+import os
+from pathlib import Path
 
 from src.models.l1c2l2a_adapter import L1C2L2AAdapter
 #from src.CBM.concepts_minimal import _load_sae_from_ckpt
@@ -14,8 +17,8 @@ from msclip.inference.utils import build_model
 from msclip.inference.clearclip import maybe_patch_clearclip
 from msclip.inference.sclip import maybe_patch_sclip
 
-
 from src.models.sae import plSAE
+from overcomplete.sae.archetypal_dictionary import RelaxedArchetypalDictionary
 
 import sys
 import torch
@@ -137,6 +140,57 @@ class XAITemporalPool(nn.Module):
         return (1 - g) * z_mean + g * z_attn
 
 
+class TemporalConvMixer(nn.Module):
+    def __init__(self, embed_dim=768, mlp_ratio=2.0, dropout=0.1, kernel_size=3):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(embed_dim)
+
+        #[B*P, D, T] -> [B*P, D, T] input size should be equal to ouptut size 
+        self.temporal_conv = nn.Conv1d(
+            in_channels=embed_dim,
+            out_channels=embed_dim,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            groups=embed_dim,
+            bias=False,
+        )
+        self.temporal_dropout = nn.Dropout(dropout)
+
+        self.norm2 = nn.LayerNorm(embed_dim)
+        hidden = int(embed_dim * mlp_ratio)
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim, hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden, embed_dim),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x, doy_emb=None, mask=None):
+
+        if mask is not None:
+            valid = (~mask).unsqueeze(-1).float()  # [B*P, T, 1]
+            x = x * valid                          
+            if doy_emb is not None:
+                doy_emb = doy_emb * valid          
+
+        y = x + (doy_emb if doy_emb is not None else 0.0)
+        y = self.norm1(y)                 # [B*P, T, D]
+        y = y.transpose(1, 2)             
+        y = self.temporal_conv(y)
+        y = self.temporal_dropout(y)
+        y = y.transpose(1, 2)            
+
+        x = x + y                         
+
+        x = x + self.mlp(self.norm2(x))
+
+        if mask is not None:
+            x = x * valid                
+
+        return x                          # [B*P, T, D]
+
+
 class TemporalMixer(nn.Module):
     """
     Small, stable pre-projection temporal mixer (keeps sequence length T).
@@ -193,7 +247,9 @@ class MSClipFactorizeModel(nn.Module):
         use_CBM: bool = False,
         sae_config: str = None,
         pretrained: bool = True,
-        model_config: Dict[str, Any] = None,
+        clearclip: Dict[str, Any] = None,
+        sclip: Dict[str, Any] = None,
+        denseclip: Dict[str, Any] = None,
         **kwargs,
         ):
         super().__init__()
@@ -211,7 +267,8 @@ class MSClipFactorizeModel(nn.Module):
         self.temp_enc_type = temp_enc_type
         self.ABMIL = ABMIL
         self.use_mixer = use_mixer
-
+        self.log_concepts = True
+        
         msclip_model, preprocess, tokenizer = build_model(
             model_name=model_name, pretrained=pretrained, ckpt_path=ckpt_path, device="cpu", channels=channels
         )
@@ -222,16 +279,17 @@ class MSClipFactorizeModel(nn.Module):
         self.vision.output_tokens = True
         
         # -- ClearCLIP
-        if model_config is not None and "clearclip" in model_config and model_config["clearclip"]["enabled"]:
-            num_patched = maybe_patch_clearclip(self.image_encoder, model_config["clearclip"])
+        if clearclip is not None and clearclip["enabled"]:
+            num_patched = maybe_patch_clearclip(self.image_encoder, clearclip)
+            print("Patched clearclip : ", num_patched)
             if num_patched > 0:
                 print(f"[ClearCLIP] Patched last {num_patched} vision blocks "
-                    f"(keep_ffn={model_config['clearclip'].get('keep_ffn', False)}, "
-                    f"keep_residual={model_config['clearclip'].get('keep_residual', False)})")
+                    f"(keep_ffn={clearclip.get('keep_ffn', False)}, "
+                    f"keep_residual={clearclip.get('keep_residual', False)})")
 
         # --- SCLIP
-        if model_config is not None and "sclip" in model_config and model_config["sclip"]["enabled"]:
-            num_patched = maybe_patch_sclip(self.image_encoder, model_config["sclip"])
+        if sclip is not None and sclip["enabled"]:
+            num_patched = maybe_patch_sclip(self.image_encoder, sclip)
             if num_patched > 0:
                 print(f"[SCLIP] Patched last {num_patched} vision blocks "
                       f"(CSA attention)")
@@ -268,18 +326,44 @@ class MSClipFactorizeModel(nn.Module):
             self.cls_temp_enc = TemporalAttention(embed_dim=self.embed_dim, num_heads=4, dropout=0.1, learned_query=learned_query)
         
         self.useCBM = use_CBM
+        self.last_concept_map = None
         if self.useCBM:
             cfg_sae = OmegaConf.load(sae_config)
             sae_model_config = OmegaConf.to_container(cfg_sae["sae"], resolve=True)
-            sae_model_config.pop("_target_", None) 
+            sae_model_config.pop("_target_", None)
+
+            # 1) Build plSAE with the same config as during training
             self.sae = plSAE(**sae_model_config)
-            self.sae = plSAE.load_from_checkpoint(cfg_sae["sae_ckpt_path"], map_location="cuda:0", **sae_model_config)
+
+            # 2) If archetypal dictionary was used during training, recreate it
+            if cfg_sae["use_archetypal"]["enabled"]:
+                points = np.load(Path(cfg_sae["sae_ckpt_path"]).parent / "archetypalPoints.npy")
+
+                archetypal_dict = RelaxedArchetypalDictionary(
+                    in_dimensions=cfg_sae.sae.sae_kwargs["input_shape"],
+                    nb_concepts=cfg_sae.sae.sae_kwargs["nb_concepts"],
+                    points=torch.as_tensor(points),
+                    delta=1.0,
+                )
+                # IMPORTANT: override dictionary *before* loading weights
+                self.sae.net.dictionary = archetypal_dict
+
+            # 3) Manually load the Lightning checkpoint
+            ckpt = torch.load(cfg_sae["sae_ckpt_path"], map_location="cuda:0")
+            state_dict = ckpt["state_dict"]
+
+            missing, unexpected = self.sae.load_state_dict(state_dict, strict=True)
+            if missing or unexpected:
+                print("SAE load_state_dict — missing:", missing, "unexpected:", unexpected)
+
             self.sae.eval().to("cuda:0")
+
             for p in self.sae.net.parameters():
                 p.requires_grad = False
 
             concept_dim = cfg_sae["nb_concepts"]
             self.head = nn.Conv2d(concept_dim, num_classes, 1)
+
         else:
             self.head = nn.Conv2d(self.embed_dim, num_classes, 1)
             nn.init.kaiming_normal_(self.head.weight, nonlinearity="linear")
@@ -291,9 +375,10 @@ class MSClipFactorizeModel(nn.Module):
         self.denseclip_concat_scores = False
         self.denseclip_tau = 0.07
         self.last_denseclip_score_map = None
+        self._tokenizer = tokenizer
 
-        if model_config is not None and "denseclip" in model_config and model_config["denseclip"]["enabled"]:
-            cfg_dense = model_config["denseclip"]
+        if denseclip is not None and denseclip["enabled"]:
+            cfg_dense = denseclip
 
             # required
             class_names = cfg_dense["class_names"]   # list[str], must be length num_classes
@@ -302,9 +387,6 @@ class MSClipFactorizeModel(nn.Module):
 
             prompt_template = cfg_dense["prompt_template"] if "prompt_template" in cfg_dense else "a photo of a {}."
             prompts = [prompt_template.format(n) for n in class_names]
-
-            # store tokenizer from build_model earlier
-            self._tokenizer = tokenizer
 
             tokens = self._tokenizer(prompts)
             text_device = next(self.msclip_model.parameters()).device
@@ -559,6 +641,7 @@ class MSClipFactorizeModel(nn.Module):
             with torch.no_grad():
                 z_pre, z = self.sae.net.encode(patch_flat)   # concepts
             patch_feats = z.view(B, self.H_patch, self.W_patch, -1).permute(0,3,1,2).contiguous()  # [B, C_concept, H_p, W_p]
+            self.last_concept_map = patch_feats.detach()
 
 
         out = self.head(patch_feats)

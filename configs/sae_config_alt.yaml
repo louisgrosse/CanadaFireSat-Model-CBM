@@ -126,7 +126,7 @@ trainer:
 
   min_epochs: ${min_epochs}
   max_epochs: ${max_epochs}
-  accumulate_grad_batches: 1 # set to 2 for 2x batch size, etc.
+  accumulate_grad_batches: 42 # set to 2 for 2x batch size, etc.
 
   accelerator: gpu
   devices: 1
@@ -224,7 +224,7 @@ use_archetypal:
 input_shape: 512
 nb_concepts: 4096
 nb_k: 4 # See Analysis in Scaling ...
-sae_lr: 1e-6
+sae_lr: 1e-5
 sae_batch_size: 256
 sae_min_epochs: 1
 sae_max_epochs: 80
@@ -247,7 +247,7 @@ seed: 42
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "SAE_k4_4096_mixer_lr5_BM_lr6"
+  experiment_name: "SAE_k4_4096_mixer_lr5_BM_lr5"
   save_path: "./results/topk_overcomplete_runs"
   train_metrics_steps: 200 
   save_steps: 10000

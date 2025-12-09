@@ -289,7 +289,7 @@ def load_captions_dictionary_csv(
 
     all_rows = []
 
-    df = pd.read_csv(path)
+    df = pd.read_csv(path,sep=";")
 
     col_concept = None
     col_count = None
@@ -645,13 +645,14 @@ def main(cfg: DictConfig):
     global_sim_max  = np.full(len(phrases), -1e9, dtype=float)
     plotted_batches = 0
 
+    image_entropies = []
+
     vision = model.clip_base_model.model.visual  
     vision.output_tokens = True
 
-    image_encoder = model.image_encoder
     model_config = cfg["MODEL"]
     if model_config is not None and "clearclip" in model_config and model_config["clearclip"]["enabled"]:
-        num_patched = maybe_patch_clearclip(model, model_config["clearclip"])
+        num_patched = maybe_patch_clearclip(model.image_encoder, model_config["clearclip"])
         if num_patched > 0:
             print(f"[ClearCLIP] Patched last {num_patched} vision blocks "
                 f"(keep_ffn={model_config['clearclip'].get('keep_ffn', False)}, "
@@ -665,6 +666,10 @@ def main(cfg: DictConfig):
 
     for bi, batch in enumerate(tqdm(loader)):
         # batch[0] is the dict with "inputs" (and labels, etc.)
+
+        if bi > 10000:
+            break
+
         x = batch[0]["inputs"]             # [B,T,C,H,W], MS-CLIP normed
         B,T,C,H,W = x.shape
         x = x.to(cfg["device"], non_blocking=True)
@@ -689,6 +694,18 @@ def main(cfg: DictConfig):
         sims_np = sims.detach().cpu().numpy()
 
         Bcur, Pcur = top1_np.shape
+
+        for bb in range(Bcur):
+            patch_labels = top1_np[bb]  # shape [Pcur]
+            # count how many times each phrase appears within this image
+            counts_img = np.bincount(patch_labels, minlength=len(phrases))
+
+            if Pcur > 0:
+                probs_img = counts_img[counts_img > 0].astype(np.float64) / float(Pcur)
+                # Shannon entropy (nats); lower = more uniform / less noisy labels per image
+                H_img = -np.sum(probs_img * np.log(probs_img))
+                image_entropies.append(H_img)
+
         for bb in range(Bcur):
             for pp in range(Pcur):
                 k = int(top1_np[bb, pp])
@@ -777,6 +794,55 @@ def main(cfg: DictConfig):
     csv_path = os.path.join(cfg["out_dir"], "global_phrase_counts.csv")
     df.to_csv(csv_path, index=False)
     print(f"[INFO] Wrote {csv_path}")
+
+    total_patches = int(global_counts.sum())
+    active_phrases = int((global_counts > 0).sum())
+
+    if total_patches > 0 and active_phrases > 0:
+        # Global phrase-usage entropy over all patches in the dataset
+        probs_global = global_counts[global_counts > 0].astype(np.float64) / float(total_patches)
+        H_global_nats = float(-np.sum(probs_global * np.log(probs_global)))
+        H_global_bits = H_global_nats / np.log(2.0)
+        H_global_norm = H_global_nats / np.log(active_phrases)  # normalized to [0,1]
+
+        num_images = len(image_entropies)
+        if num_images > 0:
+            image_entropies = np.asarray(image_entropies, dtype=np.float64)
+            H_image_mean = float(image_entropies.mean())
+            H_image_std  = float(image_entropies.std())
+            H_image_min  = float(image_entropies.min())
+            H_image_max  = float(image_entropies.max())
+        else:
+            H_image_mean = H_image_std = H_image_min = H_image_max = np.nan
+
+        print("[INFO] Entropy over global phrase usage (patch labels)")
+        print(f"       H_global (nats)       = {H_global_nats:.4f}")
+        print(f"       H_global (bits)       = {H_global_bits:.4f}")
+        print(f"       H_global_norm (0-1)   = {H_global_norm:.4f}")
+        print("[INFO] Mean per-image label entropy (nats): "
+              f"{H_image_mean:.4f} ± {H_image_std:.4f} "
+              f"(min={H_image_min:.4f}, max={H_image_max:.4f})")
+
+        # Save a tiny CSV so you can compare models easily
+        entropy_df = pd.DataFrame({
+            "total_patches": [total_patches],
+            "active_phrases": [active_phrases],
+            "H_global_nats": [H_global_nats],
+            "H_global_bits": [H_global_bits],
+            "H_global_normalized": [H_global_norm],
+            "num_images": [num_images],
+            "H_image_mean_nats": [H_image_mean],
+            "H_image_std_nats": [H_image_std],
+            "H_image_min_nats": [H_image_min],
+            "H_image_max_nats": [H_image_max],
+        })
+
+        entropy_path = os.path.join(cfg["out_dir"], "entropy_stats.csv")
+        entropy_df.to_csv(entropy_path, index=False)
+        print(f"[INFO] Wrote {entropy_path}")
+    else:
+        print("[WARN] Could not compute entropy (no patches or no active phrases).")
+
 
 
 

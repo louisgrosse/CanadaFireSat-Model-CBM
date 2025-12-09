@@ -300,7 +300,7 @@ class plSAE(pl.LightningModule):
         dead_ratio = self.test_dead_tracker.get_dead_ratio()
         print(f"Dead Test Ratio {dead_ratio}")
         self.log("test/dead_features", dead_ratio, prog_bar=True)
-        self.test_dead_tracker = None
+        #self.test_dead_tracker = None
 
 
     @torch.no_grad()

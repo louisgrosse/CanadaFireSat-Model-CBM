@@ -2,34 +2,21 @@ defaults:
   - _self_
   - global_config
 
-model_path: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_mixer_noDS/MSClipFacto-15-f1-0.43.ckpt" 
+model_path: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_mixer_CBM_slow/MSClipFacto-19-f1-0.48.ckpt" 
 config_name: "config_file.yaml"
 mode: "image"
-split: "test" # test, val, test_hard
-output_dir: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_mixer_noDS/metrics"
+split: "test" # test, val,test_hard
+output_dir: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_mixer_CBM_slow/metrics"
 seed: 42
-with_region: False
+with_region: True
 n_plots: 50
 size_plots: 6
 
-VIS:
-  enable: true            
-  vis_dir: null           
-  num_vis: 50 
-  sanity_check_n: 8            
-  p_vis_pos: 0.01         
-  overlay: false          
-  rank_subdirs: true      
-  figsize: [10, 3]        
-  dpi: 150                
-  save_format: "png"   
-  band_map: [2, 1, 0]         # B4,B3,B2 in MS-CLIP order [B2,B3,B4,...] 
-
 CHECKPOINT:
-  experiment_name: MS-CLIP_mixer_noDS
-  group: V3
-  load_from_checkpoint: null
-  save_path: results/models/MS-CLIP_mixer_noDS
+  experiment_name: MS-CLIP_mixer_CBM_slow
+  group: V4
+  load_from_checkpoint: /home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_mixer/MSClipFacto-09-f1-0.47.ckpt
+  save_path: results/models/MS-CLIP_mixer_CBM_slow
   save_steps: 10000
   train_metrics_steps: 200
   wandb_project: wildfire-forecast
@@ -65,6 +52,7 @@ MODEL:
   ABMIL: false
   architecture: MSClipFacto
   channels: 10
+  log_concepts: true
   clearclip:
     attn_variant: qq
     enabled: false
@@ -79,7 +67,7 @@ MODEL:
     enabled: false
     prompt_template: A satellite image of {}.
     tau: 0.07
-  ds_labels: false
+  ds_labels: true
   fire_class_id: 1
   freeze_msclip: true
   img_res: 224
@@ -91,18 +79,22 @@ MODEL:
   msclip_ckpt: ''
   msclip_model_name: Llama3-MS-CLIP-Base
   num_classes: 2
-  out_H: 224
-  out_W: 224
+  out_H: 25
+  out_W: 25
   patch_size: 16
   pretrained: true
+  sae_config: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V2/SAE_k4_4096_mixer_lr6/2025-12-05_18-54-00/config.yaml
   sclip:
     enabled: false
+    keep_ffn: true
+    keep_residual: true
     n_last: 1
   temp_enc_type: mixer
   test_max_seq_len: 5
   threshold: 0.5
   train_max_seq_len: 5
   unfreeze_last_block: false
+  use_CBM: true
   use_cls_fusion: false
   use_l1c2l2a_adapter: false
   use_mixer: true
@@ -114,13 +106,13 @@ SET-UP:
 SOLVER:
   accumulate_grad_batches: 2
   loss_function: masked_dice_loss
-  lr_base: 0.0003
-  lr_min: 1.0e-05
+  lr_base: 1.0e-05
+  lr_min: 1.0e-07
   lr_scheduler: cosine
-  lr_start: 1.0e-05
+  lr_start: 1.0e-07
   num_cycles: 1
   num_epochs: 20
-  num_steps_train: 2884
+  num_steps_train: 2765
   num_warmup_epochs: 2
   weight_decay: 0.001
 paths:

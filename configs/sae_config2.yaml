@@ -4,17 +4,17 @@ defaults:
 
 DATA:
   # Use your manifest paths
-  train_features: "/work/eceo/grosse/saeFeatures/MSCLIP_mixer/train/features.npy"
+  train_features: "/work/eceo/grosse/saeFeatures/MSCLIP_att_alt/train/features.npy"
 
 datamodule:
-  _target_: src.data.hf_Canada.sae_datamodule.SimpleActivationsDataModule   # MSCLIP_ABMIL, MSCLIP_FusedCLS, MSClearCLIP,MSCLIP_mixer
-  train_path:  /work/eceo/grosse/saeFeatures/MSCLIP_mixer/train/features.npy
-  val_path:   /work/eceo/grosse/saeFeatures/MSCLIP_mixer/validation/features.npy
-  test_path:  /work/eceo/grosse/saeFeatures/MSCLIP_mixer/test/features.npy
+  _target_: src.data.hf_Canada.sae_datamodule.SimpleActivationsDataModule   # MSCLIP_att, MSClearCLIP_att
+  train_path:  /work/eceo/grosse/saeFeatures/MSCLIP_att_alt/train/features.npy
+  val_path:   /work/eceo/grosse/saeFeatures/MSCLIP_att_alt/validation/features.npy
+  test_path:  /work/eceo/grosse/saeFeatures/MSCLIP_att_alt/test/features.npy
   batch_size: 4096
   num_workers: 8
   normalize: false
-  stats_path: /home/grosse/CanadaFireSat-Model-CBM/results/topk_overcomplete_runs/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}/stats/activations_stats.npz  # supports .json or .npz
+  stats_path: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V2/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}/stats/activations_stats.npz  # supports .json or .npz
   
 model:
   net:
@@ -26,7 +26,7 @@ task_name: "train-sae"
 
 callbacks:
   - _target_: pytorch_lightning.callbacks.ModelCheckpoint
-    dirpath: /home/grosse/CanadaFireSat-Model-CBM/results/topk_o...ns/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}
+    dirpath: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V2/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}
     filename: "epoch_{epoch:03d}"
     monitor: "val/r2"
     verbose: False
@@ -41,8 +41,8 @@ callbacks:
     save_on_train_epoch_end: null
 
   - _target_: pytorch_lightning.callbacks.ModelCheckpoint
-    dirpath: /home/grosse/CanadaFireSat-Model-CBM/results/topk_o...ns/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}
-    filename: "epoch_{epoch:03d}"
+    dirpath: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V2/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}
+    filename: "epoch_{epoch:03d}_df"
     monitor: "val/dead_features"
     verbose: False
     save_last: False
@@ -105,7 +105,7 @@ sae:
   lr: ${sae_lr}
   num_samples: 100000   #max 18549
   # resample_steps: [300000, 600000, 900000, 1200000] # Rougly 1.2M steps
-  resample_every_n_epochs: 100 # Equvivalent to NO resampling
+  resample_every_n_epochs: 1000 # Equvivalent to NO resampling
   resample_batch_size: 256
   bind_init: true
   decay_k: false
@@ -116,7 +116,7 @@ sae:
 
   criterion_kwargs:
     k_aux: 256          # typical value from the paper (they say half the size of input dim)
-    penalty: 0.03125
+    penalty: 0.0325
 
   sae_kwargs:
     input_shape: ${input_shape}
@@ -139,14 +139,14 @@ label_down: 20
 
 hydra:
   run:
-    dir: ./results/topk_overcomplete_runs/${task_name}/runs/${now:%Y-%m-%d}_${now:%H-%M-%S}
+    dir: ./results/topk_V2/${task_name}/runs/${now:%Y-%m-%d}_${now:%H-%M-%S}
 
 ALIGN:
   enabled: true
   align_loss_coeff: 0
-  csv_cosLoss_path: 'concept_counts50k_yake.csv'  # Path to concept names for cosine loss
+  csv_cosLoss_path: 'kmeans_30k.csv'  # Path to concept names for cosine loss
   csv_phrases_path: /work/eceo/grosse/dictionnary/     # CSV with columns: concept,count
-  csv_names: ['msclip_words_filtered.csv','concept_counts10k_spacy.csv', 'concept_counts50k_yake.csv','wildfire_cbm_concepts_llm_5k.csv', 'concept_counts50k_spacy.csv',concept_countsCLIPDATASET.csv] #'concept_countsCLIPDATASET.csv'
+  csv_names: ['kmeans_10k.csv','kmeans_30k.csv', 'kmeans_50k.csv', 'kmeans_30k.csv',concept_countsCLIPDATASET.csv] #'concept_countsCLIPDATASET.csv'
   msclip_model_name: "Llama3-MS-CLIP-Base"    
   msclip_ckpt:      
   pretrained: true
@@ -159,12 +159,12 @@ use_archetypal:
   uniform: false
 
 input_shape: 512
-nb_concepts: 4096
+nb_concepts: 2048
 nb_k: 4 # See Analysis in Scaling ...
-sae_lr: 1e-5
+sae_lr: 5e-6
 sae_batch_size: 256
 sae_min_epochs: 1
-sae_max_epochs: 80
+sae_max_epochs: 150
 sae_ckpt_path: null
 
 tags: ["dev"]
@@ -184,10 +184,10 @@ seed: 42
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "SAE_k4_4096_mixer_lr5_test"
-  save_path: "./results/topk_overcomplete_runs"
+  experiment_name: "SAE_k4_2048_mixer_lr6_long"
+  save_path: "./results/topk_V2"
   train_metrics_steps: 200 
   save_steps: 10000
   wandb_project: "${wandb.project}"
   wandb_user: "${wandb.user}"
-  group: SAE_mixer
+  group: SAE_V4
