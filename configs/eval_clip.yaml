@@ -5,12 +5,16 @@ defaults:
 model_path: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_mixer_CBM_slow/MSClipFacto-19-f1-0.48.ckpt" 
 config_name: "config_file.yaml"
 mode: "image"
-split: "test" # test, val,test_hard
-output_dir: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_mixer_CBM_slow/metrics"
+split: "val" # test, val,test_hard
+output_dir: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_mixer_CBM_slow/metricsAlt"
 seed: 42
 with_region: True
 n_plots: 50
 size_plots: 6
+
+CBM_ABLATION:
+  enabled: true
+  chunk_size: 1024
 
 CHECKPOINT:
   experiment_name: MS-CLIP_mixer_CBM_slow
@@ -52,7 +56,7 @@ MODEL:
   ABMIL: false
   architecture: MSClipFacto
   channels: 10
-  log_concepts: true
+  log_concepts: True
   clearclip:
     attn_variant: qq
     enabled: false

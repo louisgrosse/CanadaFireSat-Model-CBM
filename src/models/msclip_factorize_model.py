@@ -268,6 +268,7 @@ class MSClipFactorizeModel(nn.Module):
         self.ABMIL = ABMIL
         self.use_mixer = use_mixer
         self.log_concepts = True
+        self.editing_vector = None
         
         msclip_model, preprocess, tokenizer = build_model(
             model_name=model_name, pretrained=pretrained, ckpt_path=ckpt_path, device="cpu", channels=channels
@@ -641,6 +642,10 @@ class MSClipFactorizeModel(nn.Module):
             with torch.no_grad():
                 z_pre, z = self.sae.net.encode(patch_flat)   # concepts
             patch_feats = z.view(B, self.H_patch, self.W_patch, -1).permute(0,3,1,2).contiguous()  # [B, C_concept, H_p, W_p]
+
+            if self.editing_vector is not None:
+                patch_feats *= self.editing_vector.view(1, -1, 1, 1)
+
             self.last_concept_map = patch_feats.detach()
 
 

@@ -196,7 +196,7 @@ def _open_mm(path: Path, shape, dtype="float32"):
     return open_memmap(str(path), mode="w+", dtype=dtype, shape=shape)
 
 
-@hydra.main(version_base=None, config_path="/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_mixer/")
+@hydra.main(version_base=None, config_path="/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-SCLIP_mixer/")
 def main(cfg: DictConfig):
     cfg = OmegaConf.to_container(cfg, resolve=True)
 

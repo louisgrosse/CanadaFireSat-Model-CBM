@@ -2,19 +2,15 @@ defaults:
   - _self_
   - global_config
 
-DATA:
-  # Use your manifest paths
-  train_features: "/work/eceo/grosse/saeFeatures/MSCLIP_att_alt/train/features.npy"
-
 datamodule:
-  _target_: src.data.hf_Canada.sae_datamodule.SimpleActivationsDataModule   # MSCLIP_att, MSClearCLIP_att
-  train_path:  /work/eceo/grosse/saeFeatures/MSCLIP_att_alt/train/features.npy
-  val_path:   /work/eceo/grosse/saeFeatures/MSCLIP_att_alt/validation/features.npy
-  test_path:  /work/eceo/grosse/saeFeatures/MSCLIP_att_alt/test/features.npy
+  _target_: src.data.hf_Canada.sae_datamodule.SimpleActivationsDataModule   # MSCLIP_att, MSClearCLIP_att, MSSCLIP_att
+  train_path:  /work/eceo/grosse/saeFeatures/MSCLIP_att/train/features.npy
+  val_path:   /work/eceo/grosse/saeFeatures/MSCLIP_att/validation/features.npy
+  test_path:  /work/eceo/grosse/saeFeatures/MSCLIP_att/test/features.npy
   batch_size: 4096
   num_workers: 8
   normalize: false
-  stats_path: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V2/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}/stats/activations_stats.npz  # supports .json or .npz
+  stats_path: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V3/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}/stats/activations_stats.npz  # supports .json or .npz
   
 model:
   net:
@@ -26,7 +22,7 @@ task_name: "train-sae"
 
 callbacks:
   - _target_: pytorch_lightning.callbacks.ModelCheckpoint
-    dirpath: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V2/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}
+    dirpath: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V3/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}
     filename: "epoch_{epoch:03d}"
     monitor: "val/r2"
     verbose: False
@@ -41,16 +37,16 @@ callbacks:
     save_on_train_epoch_end: null
 
   - _target_: pytorch_lightning.callbacks.ModelCheckpoint
-    dirpath: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V2/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}
+    dirpath: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V3/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}
     filename: "epoch_{epoch:03d}_df"
     monitor: "val/dead_features"
     verbose: False
     save_last: False
-    save_top_k: 1
+    save_top_k: 2
     mode: "min"
     auto_insert_metric_name: True
     save_weights_only: False
-    every_n_train_steps: null
+    every_n_train_steps: 5
     train_time_interval: null
     every_n_epochs: null
     save_on_train_epoch_end: null
@@ -139,14 +135,14 @@ label_down: 20
 
 hydra:
   run:
-    dir: ./results/topk_V2/${task_name}/runs/${now:%Y-%m-%d}_${now:%H-%M-%S}
+    dir: ./results/topk_V3/${task_name}/runs/${now:%Y-%m-%d}_${now:%H-%M-%S}
 
 ALIGN:
   enabled: true
   align_loss_coeff: 0
-  csv_cosLoss_path: 'kmeans_30k.csv'  # Path to concept names for cosine loss
-  csv_phrases_path: /work/eceo/grosse/dictionnary/     # CSV with columns: concept,count
-  csv_names: ['kmeans_10k.csv','kmeans_30k.csv', 'kmeans_50k.csv', 'kmeans_30k.csv',concept_countsCLIPDATASET.csv] #'concept_countsCLIPDATASET.csv'
+  csv_cosLoss_path: 'kmeans_k3n3_10k.csv'  # Path to concept names for cosine loss
+  csv_phrases_path: /work/eceo/grosse/dictionnaryV2/     # CSV with columns: concept,count
+  csv_names: ["kmeans_k2n3_balanced_10k.csv", "kmeans_k2n3_balanced_50k.csv","kmeans_k2n5_balanced_10k.csv","kmeans_k2n5_balanced_50k.csv","random.csv"] #'concept_countsCLIPDATASET.csv' "concept_countsCLIPDATASET.csv"
   msclip_model_name: "Llama3-MS-CLIP-Base"    
   msclip_ckpt:      
   pretrained: true
@@ -159,12 +155,12 @@ use_archetypal:
   uniform: false
 
 input_shape: 512
-nb_concepts: 2048
+nb_concepts: 4096
 nb_k: 4 # See Analysis in Scaling ...
 sae_lr: 5e-6
 sae_batch_size: 256
 sae_min_epochs: 1
-sae_max_epochs: 150
+sae_max_epochs: 100
 sae_ckpt_path: null
 
 tags: ["dev"]
@@ -184,10 +180,10 @@ seed: 42
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "SAE_k4_2048_mixer_lr6_long"
-  save_path: "./results/topk_V2"
+  experiment_name: "SAE_k4_4096_archetypal"
+  save_path: "./results/topk_V3"
   train_metrics_steps: 200 
   save_steps: 10000
   wandb_project: "${wandb.project}"
   wandb_user: "${wandb.user}"
-  group: SAE_V4
+  group: SAE_V5

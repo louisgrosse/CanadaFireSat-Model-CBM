@@ -596,7 +596,6 @@ def visualize_positives_tripanel(
         else:
             plt.show()
 
-
 @hydra.main(version_base=None, config_path=str(CONFIG_PATH))
 def main(cfg: DictConfig):
 
@@ -605,243 +604,242 @@ def main(cfg: DictConfig):
     set_seed(cfg["SET-UP"]["seed"])
     os.makedirs(cfg["out_dir"], exist_ok=True)
 
-    print("[INFO] Loading MS-CLIP…")
-    model_, preprocess, tokenizer = build_model(
-        model_name=cfg["MODEL"]["msclip_model_name"],
-        pretrained=cfg["MODEL"]["pretrained"],
-        ckpt_path=cfg["MODEL"]["msclip_ckpt"],
-        device=cfg["device"],
-        channels=cfg["MODEL"]["input_dim"],
-    )
-    model = model_.to(cfg["device"]).eval()
-   
-    print(f"[INFO] Loading HF parquet dataloader from", cfg["data_dir"]," split=",cfg["split"])
-    loader = get_data(cfg).test_dataloader()
+    for caption in cfg["captions_glob"]:
+        out_name = os.path.splitext(caption)[0]
+        print("[INFO] Loading MS-CLIP…")
+        model_, preprocess, tokenizer = build_model(
+            model_name=cfg["MODEL"]["msclip_model_name"],
+            pretrained=cfg["MODEL"]["pretrained"],
+            ckpt_path=cfg["MODEL"]["msclip_ckpt"],
+            device=cfg["device"],
+            channels=cfg["MODEL"]["input_dim"],
+        )
+        model = model_.to(cfg["device"]).eval()
+    
+        print(f"[INFO] Loading HF parquet dataloader from", cfg["data_dir"]," split=",cfg["split"])
+        #loader = get_data(cfg).test_dataloader()
+        loader = get_data(cfg).val_dataloader()
 
-    print("[INFO] Loading captions corpus…")
-    phrases = load_captions_dictionary_auto(
-        cfg["captions_dir"],
-        cfg["captions_glob"],
-        cfg["max_phrases"],
-    )
+        print("[INFO] Loading captions corpus…")
+        phrases = load_captions_dictionary_auto(
+            cfg["captions_dir"],
+            caption,
+            cfg["max_phrases"],
+        )
 
-    if False:
-        model = get_model(cfg,cfg["device"])
-        
-    ckpt = cfg["CHECKPOINT"].get("load_from_checkpoint", "")
-    if ckpt:
-        load_from_checkpoint(model, ckpt)
-    model.eval().to(cfg["device"])
+        if False:
+            model = get_model(cfg,cfg["device"])
+            
+        ckpt = cfg["CHECKPOINT"].get("load_from_checkpoint", "")
+        if ckpt:
+            load_from_checkpoint(model, ckpt)
+        model.eval().to(cfg["device"])
 
-    print("[INFO] Encoding text embeddings…")
-    text_embs = tokenize_phrases(tokenizer, phrases, cfg["text_batch_size"], cfg["device"], model)  # [N,D]
+        print("[INFO] Encoding text embeddings…")
+        text_embs = tokenize_phrases(tokenizer, phrases, cfg["text_batch_size"], cfg["device"], model)  # [N,D]
 
-    global_counts = np.zeros(len(phrases), dtype=int)
+        global_counts = np.zeros(len(phrases), dtype=int)
 
-    # new: sum of cosine sims for that phrase over all assignments
-    global_sim_sums = np.zeros(len(phrases), dtype=float)
+        # new: sum of cosine sims for that phrase over all assignments
+        global_sim_sums = np.zeros(len(phrases), dtype=float)
 
-    # optional (not strictly needed, but nice to have if you want max confidence later)
-    global_sim_max  = np.full(len(phrases), -1e9, dtype=float)
-    plotted_batches = 0
+        # optional (not strictly needed, but nice to have if you want max confidence later)
+        global_sim_max  = np.full(len(phrases), -1e9, dtype=float)
+        plotted_batches = 0
 
-    image_entropies = []
+        image_entropies = []
 
-    vision = model.clip_base_model.model.visual  
-    vision.output_tokens = True
+        vision = model.clip_base_model.model.visual  
+        vision.output_tokens = True
 
-    model_config = cfg["MODEL"]
-    if model_config is not None and "clearclip" in model_config and model_config["clearclip"]["enabled"]:
-        num_patched = maybe_patch_clearclip(model.image_encoder, model_config["clearclip"])
-        if num_patched > 0:
-            print(f"[ClearCLIP] Patched last {num_patched} vision blocks "
-                f"(keep_ffn={model_config['clearclip'].get('keep_ffn', False)}, "
-                f"keep_residual={model_config['clearclip'].get('keep_residual', False)})")
+        model_config = cfg["MODEL"]
+        if model_config is not None and "clearclip" in model_config and model_config["clearclip"]["enabled"]:
+            num_patched = maybe_patch_clearclip(model.image_encoder, model_config["clearclip"])
+            if num_patched > 0:
+                print(f"[ClearCLIP] Patched last {num_patched} vision blocks "
+                    f"(keep_ffn={model_config['clearclip'].get('keep_ffn', False)}, "
+                    f"keep_residual={model_config['clearclip'].get('keep_residual', False)})")
 
-    if model_config is not None and "sclip" in model_config and model_config["sclip"]["enabled"]:
-        num_patched = maybe_patch_sclip(model.image_encoder, model_config["sclip"])
-        if num_patched > 0:
-            print(f"[SCLIP] Patched last {num_patched} vision blocks "
-                    f"(CSA attention)")
+        if model_config is not None and "sclip" in model_config and model_config["sclip"]["enabled"]:
+            num_patched = maybe_patch_sclip(model.image_encoder, model_config["sclip"])
+            if num_patched > 0:
+                print(f"[SCLIP] Patched last {num_patched} vision blocks "
+                        f"(CSA attention)")
 
-    for bi, batch in enumerate(tqdm(loader)):
-        # batch[0] is the dict with "inputs" (and labels, etc.)
+        for bi, batch in enumerate(tqdm(loader)):
+            # batch[0] is the dict with "inputs" if you are using the test set
+            # batch is the dict with "inputs" if you are using the val set
 
-        if bi > 10000:
-            break
+            input_ = batch
+            x = input_["inputs"]             # [B,T,C,H,W], MS-CLIP normed
+            B,T,C,H,W = x.shape
+            x = x.to(cfg["device"], non_blocking=True)
 
-        x = batch[0]["inputs"]             # [B,T,C,H,W], MS-CLIP normed
-        B,T,C,H,W = x.shape
-        x = x.to(cfg["device"], non_blocking=True)
+            patch_tokens_over_time = []
+            pooled_over_time = []
 
-        patch_tokens_over_time = []
-        pooled_over_time = []
+            X = x[:, 0,:,:,:]                    # [B,C,H,W]
+            pool, ptoks = model.image_encoder(X)
+            ptoks = vision.ln_post(ptoks)      # [B*T, P, 768] -> LN
+            ptoks = ptoks @ vision.proj
 
-        X = x[:, 0]                    # [B,C,H,W]
-        pool, ptoks = model.image_encoder(X)
-        ptoks = vision.ln_post(ptoks)      # [B*T, P, 768] -> LN
-        ptoks = ptoks @ vision.proj
+            # cosine sim to all phrases, per patch
+            scores, idx = assign_labels_to_patches(ptoks, text_embs, topk=1)
+            # idx:    [B,P,1] → squeeze to [B,P]
+            # scores: [B,P,1] → squeeze to [B,P]
+            top1 = idx.squeeze(-1)
+            sims = scores.squeeze(-1)
 
-        # cosine sim to all phrases, per patch
-        scores, idx = assign_labels_to_patches(ptoks, text_embs, topk=1)
-        # idx:    [B,P,1] → squeeze to [B,P]
-        # scores: [B,P,1] → squeeze to [B,P]
-        top1 = idx.squeeze(-1)
-        sims = scores.squeeze(-1)
+            # --- accumulate global stats for CSV ---
+            top1_np = top1.detach().cpu().numpy()
+            sims_np = sims.detach().cpu().numpy()
 
-        # --- accumulate global stats for CSV ---
-        top1_np = top1.detach().cpu().numpy()
-        sims_np = sims.detach().cpu().numpy()
+            Bcur, Pcur = top1_np.shape
 
-        Bcur, Pcur = top1_np.shape
+            for bb in range(Bcur):
+                patch_labels = top1_np[bb]  # shape [Pcur]
+                # count how many times each phrase appears within this image
+                counts_img = np.bincount(patch_labels, minlength=len(phrases))
 
-        for bb in range(Bcur):
-            patch_labels = top1_np[bb]  # shape [Pcur]
-            # count how many times each phrase appears within this image
-            counts_img = np.bincount(patch_labels, minlength=len(phrases))
+                if Pcur > 0:
+                    probs_img = counts_img[counts_img > 0].astype(np.float64) / float(Pcur)
+                    # Shannon entropy (nats); lower = more uniform / less noisy labels per image
+                    H_img = -np.sum(probs_img * np.log(probs_img))
+                    image_entropies.append(H_img)
 
-            if Pcur > 0:
-                probs_img = counts_img[counts_img > 0].astype(np.float64) / float(Pcur)
-                # Shannon entropy (nats); lower = more uniform / less noisy labels per image
-                H_img = -np.sum(probs_img * np.log(probs_img))
-                image_entropies.append(H_img)
+            for bb in range(Bcur):
+                for pp in range(Pcur):
+                    k = int(top1_np[bb, pp])
+                    sim_val = float(sims_np[bb, pp])
 
-        for bb in range(Bcur):
-            for pp in range(Pcur):
-                k = int(top1_np[bb, pp])
-                sim_val = float(sims_np[bb, pp])
+                    global_counts[k] += 1
+                    global_sim_sums[k] += sim_val
+                    if sim_val > global_sim_max[k]:
+                        global_sim_max[k] = sim_val
 
-                global_counts[k] += 1
-                global_sim_sums[k] += sim_val
-                if sim_val > global_sim_max[k]:
-                    global_sim_max[k] = sim_val
+            # --- positive filtering for visualization ---
+            pos_idx_list = _get_positive_indices(input_, min_pos_frac=0.3)
 
-        # --- positive filtering for visualization ---
-        pos_idx_list = _get_positive_indices(batch[0], min_pos_frac=0.3)
+            # safety stop condition you added
+            if plotted_batches > cfg["n_show_batches"]:
+                break
 
-        # safety stop condition you added
-        if plotted_batches > cfg["n_show_batches"]:
-            break
+            if len(pos_idx_list) > 0 and plotted_batches < cfg["n_show_batches"]:
 
-        if len(pos_idx_list) > 0 and plotted_batches < cfg["n_show_batches"]:
+                # slice to positives only
+                x_pos    = x[pos_idx_list]        # [Bpos,T,C,H,W]
+                top1_pos = top1[pos_idx_list]     # [Bpos,P]
 
-            # slice to positives only
-            x_pos    = x[pos_idx_list]        # [Bpos,T,C,H,W]
-            top1_pos = top1[pos_idx_list]     # [Bpos,P]
-            print("============>", top1_pos)
+                # get binarized GT label mask at coarse resolution
+                # NOTE: your dataloader stores labels in input_["labels"], shape [B,Hc,Wc,C?] or similar
+                # you used .permute(0,3,1,2) earlier, so let's keep that
+                y_full = input_["labels"]
+                y_bin  = _binarize_labels(y_full, input_["inputs"])  # -> [B,1,Hc,Wc] or None
 
-            # get binarized GT label mask at coarse resolution
-            # NOTE: your dataloader stores labels in batch[0]["labels"], shape [B,Hc,Wc,C?] or similar
-            # you used .permute(0,3,1,2) earlier, so let's keep that
-            y_full = batch[0]["labels"]
-            y_bin  = _binarize_labels(y_full, batch[0]["inputs"])  # -> [B,1,Hc,Wc] or None
+                if y_bin is not None:
+                    y_pos = y_bin[pos_idx_list].to(x.device)
 
-            if y_bin is not None:
-                y_pos = y_bin[pos_idx_list].to(x.device)
-
-                savepath = os.path.join(cfg["out_dir"], f"batch_{bi:04d}_positives.png")
-                visualize_positives_tripanel(
-                    x_pos_btc_hw = x_pos,
-                    top1_pos_bp  = top1_pos,
-                    y_pos_b1hw   = y_pos,
-                    phrases      = phrases,
-                    rgb_bands    = cfg["rgb_bands"],
-                    savepath     = savepath,
-                    alpha        = 0.35,
-                    max_legend   = 15,
-                    min_frac     = 0.02,
-                    title_prefix = f"{cfg['split']}",
-                )
-                plotted_batches += 1
+                    savepath = os.path.join(cfg["out_dir"], f"batch_{bi:04d}_positives_{out_name}.png")
+                    visualize_positives_tripanel(
+                        x_pos_btc_hw = x_pos,
+                        top1_pos_bp  = top1_pos,
+                        y_pos_b1hw   = y_pos,
+                        phrases      = phrases,
+                        rgb_bands    = cfg["rgb_bands"],
+                        savepath     = savepath,
+                        alpha        = 0.35,
+                        max_legend   = 15,
+                        min_frac     = 0.02,
+                        title_prefix = f"{cfg['split']}",
+                    )
+                    plotted_batches += 1
 
 
-    print("finished making graphs")
-    # Global plot adn CSV
-    topN = cfg["topk_words_plot"]
-    print("Started Sorting")
-    top_idx = np.argsort(-global_counts)[:topN]
-    print("Finished sorting")
-    top_vals = global_counts[top_idx]
-    top_labels = [phrases[i] for i in top_idx]
+        # Global plot adn CSV
+        topN = cfg["topk_words_plot"]
+        top_idx = np.argsort(-global_counts)[:topN]
+        top_vals = global_counts[top_idx]
+        top_labels = [phrases[i] for i in top_idx]
 
-    plt.figure(figsize=(10, max(4, topN*0.25)))
-    plt.barh(range(len(top_labels)-1, -1, -1), top_vals[::-1])
-    plt.yticks(range(len(top_labels)-1, -1, -1), top_labels[::-1], fontsize=7)
-    plt.xlabel("Patch count (top-1)")
-    plt.title(f"Top {topN} phrases across dataset (by patch top-1 label)")
-    bar_path = os.path.join(cfg["out_dir"], f"global_top_{topN}_phrases.png")
-    plt.tight_layout()
-    plt.savefig(bar_path, dpi=200)
-    plt.close()
-    print(f"[INFO] Wrote {bar_path}")
+        if False:
+            plt.figure(figsize=(10, max(4, topN*0.25)))
+            plt.barh(range(len(top_labels)-1, -1, -1), top_vals[::-1])
+            plt.yticks(range(len(top_labels)-1, -1, -1), top_labels[::-1], fontsize=7)
+            plt.xlabel("Patch count (top-1)")
+            plt.title(f"Top {topN} phrases across dataset (by patch top-1 label)")
+            bar_path = os.path.join(cfg["out_dir"], f"global_top_{topN}_phrases_{out_name}.png")
+            plt.tight_layout()
+            plt.savefig(bar_path, dpi=200)
+            plt.close()
+            print(f"[INFO] Wrote {bar_path}")
 
-    # avoid divide-by-zero: where count == 0, avg_sim should be NaN
-    with np.errstate(divide='ignore', invalid='ignore'):
-        avg_sims = np.where(global_counts > 0,
-                            global_sim_sums / global_counts,
-                            np.nan)
+        # avoid divide-by-zero: where count == 0, avg_sim should be NaN
+        with np.errstate(divide='ignore', invalid='ignore'):
+            avg_sims = np.where(global_counts > 0,
+                                global_sim_sums / global_counts,
+                                np.nan)
 
-    df = pd.DataFrame({
-        "phrase": phrases,
-        "count": global_counts,
-        "avg_cosine_sim": avg_sims,
-        "max_cosine_sim": global_sim_max
-    })
-
-    # sort by count first, then avg cosine similarity
-    df = df.sort_values(["count", "avg_cosine_sim"], ascending=[False, False])
-
-    csv_path = os.path.join(cfg["out_dir"], "global_phrase_counts.csv")
-    df.to_csv(csv_path, index=False)
-    print(f"[INFO] Wrote {csv_path}")
-
-    total_patches = int(global_counts.sum())
-    active_phrases = int((global_counts > 0).sum())
-
-    if total_patches > 0 and active_phrases > 0:
-        # Global phrase-usage entropy over all patches in the dataset
-        probs_global = global_counts[global_counts > 0].astype(np.float64) / float(total_patches)
-        H_global_nats = float(-np.sum(probs_global * np.log(probs_global)))
-        H_global_bits = H_global_nats / np.log(2.0)
-        H_global_norm = H_global_nats / np.log(active_phrases)  # normalized to [0,1]
-
-        num_images = len(image_entropies)
-        if num_images > 0:
-            image_entropies = np.asarray(image_entropies, dtype=np.float64)
-            H_image_mean = float(image_entropies.mean())
-            H_image_std  = float(image_entropies.std())
-            H_image_min  = float(image_entropies.min())
-            H_image_max  = float(image_entropies.max())
-        else:
-            H_image_mean = H_image_std = H_image_min = H_image_max = np.nan
-
-        print("[INFO] Entropy over global phrase usage (patch labels)")
-        print(f"       H_global (nats)       = {H_global_nats:.4f}")
-        print(f"       H_global (bits)       = {H_global_bits:.4f}")
-        print(f"       H_global_norm (0-1)   = {H_global_norm:.4f}")
-        print("[INFO] Mean per-image label entropy (nats): "
-              f"{H_image_mean:.4f} ± {H_image_std:.4f} "
-              f"(min={H_image_min:.4f}, max={H_image_max:.4f})")
-
-        # Save a tiny CSV so you can compare models easily
-        entropy_df = pd.DataFrame({
-            "total_patches": [total_patches],
-            "active_phrases": [active_phrases],
-            "H_global_nats": [H_global_nats],
-            "H_global_bits": [H_global_bits],
-            "H_global_normalized": [H_global_norm],
-            "num_images": [num_images],
-            "H_image_mean_nats": [H_image_mean],
-            "H_image_std_nats": [H_image_std],
-            "H_image_min_nats": [H_image_min],
-            "H_image_max_nats": [H_image_max],
+        df = pd.DataFrame({
+            "phrase": phrases,
+            "count": global_counts,
+            "avg_cosine_sim": avg_sims,
+            "max_cosine_sim": global_sim_max
         })
 
-        entropy_path = os.path.join(cfg["out_dir"], "entropy_stats.csv")
-        entropy_df.to_csv(entropy_path, index=False)
-        print(f"[INFO] Wrote {entropy_path}")
-    else:
-        print("[WARN] Could not compute entropy (no patches or no active phrases).")
+        # sort by count first, then avg cosine similarity
+        df = df.sort_values(["count", "avg_cosine_sim"], ascending=[False, False])
+
+        csv_path = os.path.join(cfg["out_dir"], f"global_phrase_counts_{out_name}.csv")
+        df.to_csv(csv_path, index=False)
+        print(f"[INFO] Wrote {csv_path}")
+
+        total_patches = int(global_counts.sum())
+        active_phrases = int((global_counts > 0).sum())
+
+        if total_patches > 0 and active_phrases > 0:
+            # Global phrase-usage entropy over all patches in the dataset
+            probs_global = global_counts[global_counts > 0].astype(np.float64) / float(total_patches)
+            H_global_nats = float(-np.sum(probs_global * np.log(probs_global)))
+            H_global_bits = H_global_nats / np.log(2.0)
+            H_global_norm = H_global_nats / np.log(active_phrases)  # normalized to [0,1]
+
+            num_images = len(image_entropies)
+            if num_images > 0:
+                image_entropies = np.asarray(image_entropies, dtype=np.float64)
+                H_image_mean = float(image_entropies.mean())
+                H_image_std  = float(image_entropies.std())
+                H_image_min  = float(image_entropies.min())
+                H_image_max  = float(image_entropies.max())
+            else:
+                H_image_mean = H_image_std = H_image_min = H_image_max = np.nan
+
+            print("[INFO] Entropy over global phrase usage (patch labels)")
+            print(f"       H_global (nats)       = {H_global_nats:.4f}")
+            print(f"       H_global (bits)       = {H_global_bits:.4f}")
+            print(f"       H_global_norm (0-1)   = {H_global_norm:.4f}")
+            print("[INFO] Mean per-image label entropy (nats): "
+                f"{H_image_mean:.4f} ± {H_image_std:.4f} "
+                f"(min={H_image_min:.4f}, max={H_image_max:.4f})")
+
+            # Save a tiny CSV so you can compare models easily
+            entropy_df = pd.DataFrame({
+                "total_patches": [total_patches],
+                "active_phrases": [active_phrases],
+                "H_global_nats": [H_global_nats],
+                "H_global_bits": [H_global_bits],
+                "H_global_normalized": [H_global_norm],
+                "num_images": [num_images],
+                "H_image_mean_nats": [H_image_mean],
+                "H_image_std_nats": [H_image_std],
+                "H_image_min_nats": [H_image_min],
+                "H_image_max_nats": [H_image_max],
+            })
+
+            entropy_path = os.path.join(cfg["out_dir"], f"entropy_stats_{out_name}.csv")
+            entropy_df.to_csv(entropy_path, index=False)
+            print(f"[INFO] Wrote {entropy_path}")
+        else:
+            print("[WARN] Could not compute entropy (no patches or no active phrases).")
 
 
 

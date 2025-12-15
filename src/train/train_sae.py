@@ -191,6 +191,7 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
         data = []
         dataBis = []
         dataNames = []
+        ngrams = []
 
         for csv_name in tqdm(align["csv_names"]):
             if csv_name == "concept_countsCLIPDATASET.csv" or csv_name == "concept_counts50k_yake.csv":
@@ -207,7 +208,7 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
                 device=device,
             )  # [N, Dt]
 
-            mean_c, std_c, max_c, top1_vals, top_concept_rows = _alignment_stats_and_topk(
+            mean_c, std_c, max_c, top1_vals, top_concept_rows, ngrams_dict = _alignment_stats_and_topk(
                 sae_module=sae,
                 text_embs=text_embs,
                 device=device,
@@ -226,6 +227,7 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
 
             columnsBis.append(csv_name)
             dataBis.append(top1_vals.cpu())
+            ngrams.append(ngrams_dict)
 
             #wandb_logger.log_table(
             #    key=f"dictionnary_{csv_name}",
@@ -238,6 +240,12 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
                 columns=["rank", "sae_concept_id", "best_phrase", "cosine"],
                 data=top_concept_rows,
             )
+
+        wandb_logger.log_table(
+            key=f"ngram_distrib",
+            columns=columnsBis,
+            data= [list(x) for x in zip(*ngrams)],
+        )
 
         print("dataBis = ", len(dataBis), dataBis)
         print("test: ",len(dataBis[0]))
@@ -374,7 +382,10 @@ def _encode_phrases_msclip(phrases, model, tokenizer, batch_size, device):
 
 @torch.no_grad()
 def _alignment_stats_and_topk(sae_module, text_embs, device: str, phrases, k: int = 5,name:str = None, ckpt_dir:str = None,csv_name:str = None):
-    alive_mask = sae_module.test_dead_tracker.alive_features.detach().clone()
+    if sae_module.test_dead_tracker is not None:
+        alive_mask = sae_module.test_dead_tracker.alive_features.detach().clone()
+    else:
+        alive_mask = None
     #alive_mask = ~sae_module.auxk_tracker.get_dead_mask()
 
     D = sae_module.net.get_dictionary().to(device).float()
@@ -412,7 +423,13 @@ def _alignment_stats_and_topk(sae_module, text_embs, device: str, phrases, k: in
             [rank, cidx, phrases[pidx], float(val)]
         )
 
-    return mean_c, std_c, max_c, top1_concept_vals, top_concept_rows
+    ngrams = [0,0,0,0,0]
+    for id in concept_best_phrase:
+        if len(phrases[id].split()) > 5:
+            continue
+        ngrams[len(phrases[id].split())-1] += 1
+
+    return mean_c, std_c, max_c, top1_concept_vals, top_concept_rows, ngrams
 
 
 @hydra.main(version_base="1.2", config_path=str(CONFIG_PATH), config_name="sae_config.yaml")

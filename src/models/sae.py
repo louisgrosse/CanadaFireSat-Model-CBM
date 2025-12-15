@@ -76,7 +76,7 @@ class plSAE(pl.LightningModule):
         self._test_outputs = []
 
     @staticmethod
-    def sae_factory(sae_type: str,use_relaxed_dict: bool = False, **sae_kwargs) -> nn.Module:
+    def sae_factory(sae_type: str,use_relaxed_dict: bool = False, points = None, **sae_kwargs) -> nn.Module:
 
         if sae_type == "topk":
             print("Using topk sae")            
