@@ -2,6 +2,15 @@ defaults:
   - _self_
   - global_config
 
+CHECKPOINT:
+  experiment_name: MS-CLIP_mixer_CBM_k8
+  group: V4
+  load_from_checkpoint: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_mixer_alt/MSClipFacto-19-f1-0.47.ckpt"
+  save_path: results/models/MS-CLIP_mixer_alt
+  save_steps: 10000
+  train_metrics_steps: 200
+  wandb_project: wildfire-forecast
+  wandb_user: louis-grosse-epfl
 DATASETS:
   eval:
     batch_size: 24
@@ -33,10 +42,9 @@ MODEL:
   ABMIL: false
   architecture: MSClipFacto
   channels: 10
-  log_concepts: False
   clearclip:
     attn_variant: qq
-    enabled: true
+    enabled: false
     keep_ffn: false
     keep_residual: false
     n_last: 1
@@ -64,7 +72,7 @@ MODEL:
   out_W: 25
   patch_size: 16
   pretrained: true
-  sae_config: "/home/grosse/CanadaFireSat-Model-CBM/results/topk_V3/SAE_k8_8192/2025-12-11_12-40-57/config.yaml" 
+  sae_config: "/home/grosse/CanadaFireSat-Model-CBM/results/topk_V3/SAE_k8_8192/2025-12-11_12-40-57/config.yaml"
   sclip:
     enabled: false
     keep_ffn: true
@@ -75,23 +83,27 @@ MODEL:
   threshold: 0.5
   train_max_seq_len: 5
   unfreeze_last_block: false
-  use_CBM: false
+  use_CBM: true
   use_cls_fusion: false
   use_l1c2l2a_adapter: false
   use_mixer: true
   val_max_seq_len: 5
+SET-UP:
+  local_device_ids:
+  - 0
+  seed: 42
 SOLVER:
   accumulate_grad_batches: 2
   loss_function: masked_dice_loss
-  lr_base: 5.0e-05
+  lr_base: 5.0e-06
   lr_min: 1.0e-07
   lr_scheduler: cosine
   lr_start: 1.0e-07
   num_cycles: 1
-  num_epochs: 20
+  num_epochs: 10
   num_steps_train: 2765
   num_warmup_epochs: 2
-  weight_decay: 0.01
+  weight_decay: 0.001
 paths:
   bands_mean: /work/eceo/CanadaFireSat/metadata/bands_mean.json
   bands_std: /work/eceo/CanadaFireSat/metadata/bands_std.json
@@ -102,16 +114,3 @@ wandb:
   project: wildfire-forecast
   user: louis-grosse-epfl
 
-CHECKPOINT:
-  load_from_checkpoint: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_mixer_alt/MSClipFacto-19-f1-0.47.ckpt"
-  experiment_name: "MS-CLIP_mixer_CBM_k8n8192"
-  save_path: "./results/models"
-  train_metrics_steps: 200 
-  save_steps: 10000
-  wandb_project: "${wandb.project}"
-  wandb_user: "${wandb.user}"
-  group: V4
-
-SET-UP:
-  seed: 42
-  local_device_ids: [0]

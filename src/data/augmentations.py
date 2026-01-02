@@ -99,6 +99,9 @@ class StatsTap(object):
         print(f"[{self.tag}] shape={tuple(x.shape)}",
               f"min[:10]={tolist(cmins)} max[:10]={tolist(cmaxs)}",
               f"mean[:10]={tolist(cmean)} std[:10]={tolist(cstd)}")
+
+        import sys
+        sys.exit(0)
         return sample
 
 

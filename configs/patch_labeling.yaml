@@ -12,7 +12,7 @@ split: "validation"                  # "train" | "validation" | "test" | "test_h
 
 # Dictionary
 captions_dir: "/work/eceo/grosse/dictionnaryV2/"
-captions_glob: ["random.csv"] #["kmeans_k3n3_10k.csv", "kmeans_k3n3_30k.csv","kmeans_k3n3_50k.csv","kmeans_k5n2_10k.csv","kmeans_k5n2_30k.csv","kmeans_k5n2_50k.csv"]  # "*.parquet" or "*.csv"  'concept_countsCLIPDATASET.csv'
+captions_glob: ["kmeans_k5n2_11k_wildfire.csv"] #["kmeans_k3n3_10k.csv", "kmeans_k3n3_30k.csv","kmeans_k3n3_50k.csv","kmeans_k5n2_10k.csv","kmeans_k5n2_30k.csv","kmeans_k5n2_50k.csv"]  # "*.parquet" or "*.csv"  'concept_countsCLIPDATASET.csv'
 max_phrases:  #50000, None to take all, 
 text_batch_size: 512
 # Visualization
@@ -21,7 +21,7 @@ n_show_batches: 1                  # how many batches to visualize
 topk_words_plot: 8
 seed: 42
 # Output
-out_dir: "results/dictionnary/patch_naming_clearclip_random"
+out_dir: "results/dictionnary/patch_naming_sclip_fire"
 
 sae:
   load_from_ckpt: 
@@ -59,13 +59,13 @@ MODEL:
   temp_enc_type: "mixer"  #attention, mixer
   freeze_msclip: true
   clearclip:
-    enabled: true          
+    enabled: false          
     n_last: 1
     attn_variant: "qq"    
     keep_ffn: false        # should be false for ClearCLIP
     keep_residual: false   # should be false for ClearCLIP
   sclip:
-    enabled: false
+    enabled: true
     n_last: 1
     keep_ffn: true   #Turn to false if you want to combine ClearCLIP and SCLIP
     keep_residual: true

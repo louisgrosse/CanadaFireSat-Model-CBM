@@ -63,28 +63,6 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
     except Exception as e:
         log.warning(f"Could not push config to WandB: {e}")
 
-    # set seed for random number generators in pytorch, numpy and python.random
-    if cfg.get("seed"):
-        pl.seed_everything(cfg.seed, workers=True)
-    
-    #wandb_logger.log_hyperparams(cfg)
-
-    log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
-    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
-
-    log.info(f"Instantiating SAE <{cfg.sae._target_}>")
-    sae: plSAE = hydra.utils.instantiate(cfg.sae)
-
-    if cfg["model"]["net"]["from_msclip"]:
-    #If someday we want to train the sae directly after computing the npy files.
-        log.info(f"Instantiating Backbone <{cfg.model.net._target_}>")
-        net: nn.Module = hydra.utils.instantiate(cfg.model.net)
-
-        net.eval()
-        
-        sae.msclip_model = net
-        sae.from_msclip = True
-
     align = cfg.get("ALIGN")
     device = str(align.get("device", "cuda"))
 
@@ -97,7 +75,17 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
         )
     msclip = model_.eval().to(device)
 
-    if align is not None and align.get("enabled") and align.get("csv_phrases_path") and align.get("align_loss_coeff", 0) > 0:
+    # set seed for random number generators in pytorch, numpy and python.random
+    if cfg.get("seed"):
+        pl.seed_everything(cfg.seed, workers=True)
+    
+    #wandb_logger.log_hyperparams(cfg)
+
+    log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
+    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
+
+    text_embs = None
+    if align is not None and align.get("enabled") and align.get("csv_phrases_path"):
 
         all_phrases = []
         csv_name = align["csv_cosLoss_path"]
@@ -116,9 +104,6 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
             device=device,
         )  # [N, D]
 
-        sae.align_text_embs=text_embs.cpu()
-        sae.align_loss_coeff = float(align["align_loss_coeff"])
-
 
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
     trainer: Trainer = hydra.utils.instantiate(cfg.trainer, logger=[wandb_logger])
@@ -136,7 +121,48 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
     if not cfg["model"]["net"]["from_msclip"]:
         act_datamodule = NpyActDataModule(batch_size=cfg.sae_batch_size, train_npy_path=cfg.datamodule["train_path"], val_npy_path=cfg.datamodule["val_path"], test_npy_path=cfg.datamodule["test_path"])
 
+    points = None
     if cfg["use_archetypal"]["enabled"]:
+        if cfg["use_archetypal"]["CLIPtionnary"]:
+            points = text_embs
+        else:
+            if cfg["use_archetypal"]["uniform"]:
+                print("Using unisform sampling to sample points")
+                points = sample_points_uniform(dl = act_datamodule.train_dataloader(),n_points=16000)
+            else:
+                print("Using k-means to sample points")
+                points = sample_points_kmeans(dl = act_datamodule.train_dataloader(),n_centers=16_000)
+
+        print("Points shape = ", points)
+        
+        dirpath = Path(callbacks_cfg[0]["dirpath"])
+        dirpath.mkdir(parents=True, exist_ok=True)
+
+        points_np = points.detach().cpu().numpy()
+
+        np.save(file = Path(os.path.join(callbacks_cfg[0]["dirpath"], "archetypalPoints.npy")), arr = points_np)
+        
+
+    log.info(f"Instantiating SAE <{cfg.sae._target_}>")
+    sae_cfg = OmegaConf.to_container(cfg.sae, resolve=True)
+    sae_cfg.pop("_target_", None)
+    sae = plSAE(points = points, **sae_cfg)
+
+    if align is not None and align.get("enabled") and align.get("csv_phrases_path") and align.get("align_loss_coeff") > 0:
+        sae.align_text_embs=text_embs.cpu()
+        sae.align_loss_coeff = float(align["align_loss_coeff"])
+
+    if cfg["model"]["net"]["from_msclip"]:
+    #If someday we want to train the sae directly after computing the npy files.
+        log.info(f"Instantiating Backbone <{cfg.model.net._target_}>")
+        net: nn.Module = hydra.utils.instantiate(cfg.model.net)
+
+        net.eval()
+        
+        sae.msclip_model = net
+        sae.from_msclip = True
+
+    if cfg["use_archetypal"]["enabled"] and False:
         if cfg["use_archetypal"]["uniform"]:
             print("Using unisform sampling to sample points")
             points = sample_points_uniform(dl = act_datamodule.train_dataloader(),n_points=16000)
@@ -168,14 +194,16 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
         trainer_sae.fit(model=sae, datamodule=datamodule)
 
     # Test the SAE
-    if cfg["datamodule"]["test_path"] is not None:
-        if not cfg["model"]["net"]["from_msclip"]:
+    
+    if not cfg["model"]["net"]["from_msclip"]:
+        if cfg["datamodule"]["test_path"] is not None:
             trainer_sae.test(
                 model=sae,
                 datamodule=act_datamodule,
                 ckpt_path="best"
             )
-        else:
+    else:
+        if False:
             trainer_sae.test(
                 model=sae,
                 datamodule=datamodule,

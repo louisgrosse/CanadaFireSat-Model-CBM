@@ -2,25 +2,32 @@ defaults:
   - _self_
   - global_config
 
-model_path: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_mixer_CBM_slow/MSClipFacto-19-f1-0.48.ckpt" 
+model_path: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP/MS-CLIP_CBM_k8_arch_dict/MSClipFacto-09-f1-0.46.ckpt" 
 config_name: "config_file.yaml"
 mode: "image"
-split: "val" # test, val,test_hard
-output_dir: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_mixer_CBM_slow/metricsAlt"
+split: "train" # test, val,test_hard
+output_dir: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP/MS-CLIP_CBM_k8_arch_dict/metrics"
 seed: 42
 with_region: True
 n_plots: 50
 size_plots: 6
+log_concepts: true
+visualise: false
+ConceptToVisualise: 
+
 
 CBM_ABLATION:
   enabled: true
   chunk_size: 1024
+  remove_ids: [] 
+  focus_id: 
+
 
 CHECKPOINT:
-  experiment_name: MS-CLIP_mixer_CBM_slow
-  group: V4
-  load_from_checkpoint: /home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP_mixer/MSClipFacto-09-f1-0.47.ckpt
-  save_path: results/models/MS-CLIP_mixer_CBM_slow
+  experiment_name: MS-CLIP_CBM_k8_arch_dict
+  group: V5
+  load_from_checkpoint: /home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP/MSClipFacto-18-f1-0.46.ckpt
+  save_path: results/models/MS-CLIP/MS-CLIP_CBM_k8_arch_dict
   save_steps: 10000
   train_metrics_steps: 200
   wandb_project: wildfire-forecast
@@ -56,21 +63,12 @@ MODEL:
   ABMIL: false
   architecture: MSClipFacto
   channels: 10
-  log_concepts: True
   clearclip:
     attn_variant: qq
     enabled: false
     keep_ffn: false
     keep_residual: false
     n_last: 1
-  denseclip:
-    class_names:
-    - no fire
-    - fire
-    concat_scores: true
-    enabled: false
-    prompt_template: A satellite image of {}.
-    tau: 0.07
   ds_labels: true
   fire_class_id: 1
   freeze_msclip: true
@@ -80,6 +78,7 @@ MODEL:
   l1c2l2a_Adapter_loc: /work/eceo/grosse/l1c2l2a_linear.pt
   log_abmil: false
   log_abmil_fold_mixer: false
+  log_concepts: false
   msclip_ckpt: ''
   msclip_model_name: Llama3-MS-CLIP-Base
   num_classes: 2
@@ -87,7 +86,7 @@ MODEL:
   out_W: 25
   patch_size: 16
   pretrained: true
-  sae_config: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V2/SAE_k4_4096_mixer_lr6/2025-12-05_18-54-00/config.yaml
+  sae_config: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V4/SAE_k8_8192_archetypal_dict/2025-12-20_16-05-57/config.yaml
   sclip:
     enabled: false
     keep_ffn: true
@@ -110,15 +109,15 @@ SET-UP:
 SOLVER:
   accumulate_grad_batches: 2
   loss_function: masked_dice_loss
-  lr_base: 1.0e-05
+  lr_base: 5.0e-06
   lr_min: 1.0e-07
   lr_scheduler: cosine
   lr_start: 1.0e-07
   num_cycles: 1
-  num_epochs: 20
-  num_steps_train: 2765
+  num_epochs: 10
+  num_steps_train: 3252
   num_warmup_epochs: 2
-  weight_decay: 0.001
+  weight_decay: 0.01
 paths:
   bands_mean: /work/eceo/CanadaFireSat/metadata/bands_mean.json
   bands_std: /work/eceo/CanadaFireSat/metadata/bands_std.json

@@ -2,19 +2,15 @@ defaults:
   - _self_
   - global_config
 
-DATA:
-  # Use your manifest paths
-  train_features: "/work/eceo/grosse/saeFeatures/MSSCLIP_att/train/features.npy"
-
 datamodule:
-  _target_: src.data.hf_Canada.sae_datamodule.SimpleActivationsDataModule   # MSCLIP_att, MSClearCLIP_att, MSSCLIP_att
-  train_path:  /work/eceo/grosse/saeFeatures/MSSCLIP_att/train/features.npy
-  val_path:   /work/eceo/grosse/saeFeatures/MSSCLIP_att/validation/features.npy
-  test_path:  /work/eceo/grosse/saeFeatures/MSSCLIP_att/test/features.npy
+  _target_: src.data.hf_Canada.sae_datamodule.SimpleActivationsDataModule   # MS_CLIP, MS_ClearCLIP, MS_SCLIP
+  train_path:  /work/eceo/grosse/saeFeatures/MS_ClearCLIP/train/features.npy
+  val_path:   /work/eceo/grosse/saeFeatures/MS_ClearCLIP/validation/features.npy
+  test_path:  /work/eceo/grosse/saeFeatures/MS_ClearCLIP/test/features.npy
   batch_size: 4096
   num_workers: 8
   normalize: false
-  stats_path: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V3/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}/stats/activations_stats.npz  # supports .json or .npz
+  stats_path: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V4/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}/stats/activations_stats.npz  # supports .json or .npz
   
 model:
   net:
@@ -26,7 +22,7 @@ task_name: "train-sae"
 
 callbacks:
   - _target_: pytorch_lightning.callbacks.ModelCheckpoint
-    dirpath: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V3/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}
+    dirpath: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V4/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}
     filename: "epoch_{epoch:03d}"
     monitor: "val/r2"
     verbose: False
@@ -41,7 +37,7 @@ callbacks:
     save_on_train_epoch_end: null
 
   - _target_: pytorch_lightning.callbacks.ModelCheckpoint
-    dirpath: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V3/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}
+    dirpath: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V4/${CHECKPOINT.experiment_name}/${now:%Y-%m-%d}_${now:%H-%M-%S}
     filename: "epoch_{epoch:03d}_df"
     monitor: "val/dead_features"
     verbose: False
@@ -98,7 +94,7 @@ trainer_sae:
 
 sae:
   _target_: src.models.sae.plSAE
-  sae_type: "topk"  #batch_topk, topk, jump,
+  sae_type: "topk"  #batch_topk, topk, jump, ra_sae
   loss_type: "mse_auxk_true"  #mse_reanim, mse_auxk, mse_th, mse, mse_auxk_true
   optimizer_type: "adam"  
   scheduler_type: "lr_plateau"   #lr_plateau, 
@@ -139,14 +135,14 @@ label_down: 20
 
 hydra:
   run:
-    dir: ./results/topk_V3/${task_name}/runs/${now:%Y-%m-%d}_${now:%H-%M-%S}
+    dir: ./results/topk_V4/${task_name}/runs/${now:%Y-%m-%d}_${now:%H-%M-%S}
 
 ALIGN:
   enabled: true
   align_loss_coeff: 0
-  csv_cosLoss_path: 'kmeans_k3n3_10k.csv'  # Path to concept names for cosine loss
+  csv_cosLoss_path: 'kmeans_k5n2_10k.csv'  # Path to concept names for cosine loss
   csv_phrases_path: /work/eceo/grosse/dictionnaryV2/     # CSV with columns: concept,count
-  csv_names: ["kmeans_k2n3_balanced_10k.csv", "kmeans_k2n3_balanced_50k.csv","kmeans_k2n5_balanced_10k.csv","kmeans_k2n5_balanced_50k.csv","random.csv"] #'concept_countsCLIPDATASET.csv' "concept_countsCLIPDATASET.csv"
+  csv_names: ["kmeans_k3n3_10k.csv", "kmeans_k3n3_30k.csv","kmeans_k3n3_50k.csv","kmeans_k5n2_10k.csv","kmeans_k5n2_30k.csv","kmeans_k5n2_50k.csv","kmeans_k5n2_11k_wildfire.csv","random.csv"] #'concept_countsCLIPDATASET.csv' "concept_countsCLIPDATASET.csv"
   msclip_model_name: "Llama3-MS-CLIP-Base"    
   msclip_ckpt:      
   pretrained: true
@@ -157,10 +153,13 @@ ALIGN:
 use_archetypal: 
   enabled: false  #Turn off bind init if you use this
   uniform: false
+  CLIPtionnary: false
+
+  
 
 input_shape: 512
-nb_concepts: 4096
-nb_k: 4 # See Analysis in Scaling ...
+nb_concepts: 8192
+nb_k: 8 # See Analysis in Scaling ...
 sae_lr: 5e-6
 sae_batch_size: 256
 sae_min_epochs: 1
@@ -184,10 +183,10 @@ seed: 42
 
 CHECKPOINT:
   load_from_checkpoint:
-  experiment_name: "SAE_sclip_k4_4096"
-  save_path: "./results/topk_V3"
+  experiment_name: "SAE_clearclip_k8_8192"
+  save_path: "./results/topk_V4"
   train_metrics_steps: 200 
   save_steps: 10000
   wandb_project: "${wandb.project}"
   wandb_user: "${wandb.user}"
-  group: SAE_V5
+  group: SAE_V6

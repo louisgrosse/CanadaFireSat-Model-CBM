@@ -222,7 +222,6 @@ def train_and_evaluate(cfg: DictConfig):
     copy_yaml(cfg)
     wandb_logger.log_hyperparams(cfg)
 
-    print("test1")
     if False:   
         running_counts = Counter()
         for batch in tqdm(datamodule.train_dataloader()):
@@ -252,7 +251,6 @@ def train_and_evaluate(cfg: DictConfig):
         print(running_counts)
         sys.exit(0)
 
-    print("test2")
 
     # Set-up Trainer
     trainer = Trainer(

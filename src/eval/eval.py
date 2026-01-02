@@ -3,8 +3,10 @@ from pathlib import Path
 
 import hydra
 import numpy as np
+import sys
 import torch
 import math
+from pathlib import Path
 import yaml
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning import seed_everything
@@ -45,13 +47,14 @@ def evaluate(cfg: DictConfig):
     if cfg["mode"] == "image":
         try:
             model = ImgModule.load_from_checkpoint(cfg["model_path"])
+            if cfg.get("log_concepts", False):
+                model.model.log_concepts = True
         except (KeyError, RuntimeError):
             with open(Path(cfg["model_path"]).parent / cfg["config_name"], "r") as f:
                 model_cfg = yaml.load(f, Loader=yaml.SafeLoader)
             model = ImgModule(model_cfg)
             mis_keys, un_keys = model.load_state_dict(torch.load(cfg["model_path"]), strict=True)
             print("Missing keys:", mis_keys)
-
         # Test different image sizes
         if cfg["MODEL"]["out_H"] != model.model.out_H or cfg["MODEL"]["out_W"] != model.model.out_W:
             model.model.out_H = cfg["MODEL"]["out_H"]
@@ -149,8 +152,11 @@ def evaluate(cfg: DictConfig):
 
     base_model = None
     text_embs = None
+    do_ablation = False
+
 
     if model.model.useCBM and model.model.log_concepts:
+        print("loading sae config...")
         base_model = model.model  # MSClipFactorizeModel
         sae_module = model.model.sae
         if sae_module is not None and model.model.useCBM:
@@ -178,7 +184,10 @@ def evaluate(cfg: DictConfig):
                 csv_names = align["csv_names"]
                 csv_dir = str(align["csv_phrases_path"])
 
+                dict_cols = [Path(str(n)).stem for n in csv_names]  # removes ".csv"
+                n_dicts = len(dict_cols)
 
+                print("loading dictionaries...")
                 for csv_name in csv_names:
                     csv_path = csv_dir + str(csv_name)
 
@@ -203,6 +212,7 @@ def evaluate(cfg: DictConfig):
 
                     concept_names_list.append(concept_names)
                     concept_cos_list.append(concept_cos)
+                print("loaded dictionaries")
                 
                 num_concepts = len(concept_names)
                 concept_correct = np.zeros(num_concepts, dtype=np.int64)
@@ -210,6 +220,15 @@ def evaluate(cfg: DictConfig):
                 concept_false_region   = defaultdict(lambda: np.zeros(num_concepts, dtype=np.int64))
                 concept_false = np.zeros(num_concepts, dtype=np.int64)
                 concept_ids = np.arange(num_concepts, dtype=np.int64)
+                concept_energy_fire  = np.zeros(num_concepts, dtype=np.float64)
+                concept_contrib_fire = np.zeros(num_concepts, dtype=np.float64)
+
+                concept_contrib_fire_label = np.zeros(num_concepts, dtype=np.float64)
+                concept_contrib_bg_label   = np.zeros(num_concepts, dtype=np.float64)
+
+                concept_energy_fire_label = np.zeros(num_concepts, dtype=np.float64)
+                concept_energy_bg_label   = np.zeros(num_concepts, dtype=np.float64)
+
 
                 do_ablation = bool(cfg.get("CBM_ABLATION", {}).get("enabled", False))
                 abl_chunk = int(cfg.get("CBM_ABLATION", {}).get("chunk_size", 1024))
@@ -246,7 +265,33 @@ def evaluate(cfg: DictConfig):
 
 
             
-               
+    remove_ids = cfg.get("CBM_ABLATION", {}).get("remove_ids", [])
+
+    if isinstance(remove_ids, (int, np.integer)):
+        remove_ids = [int(remove_ids)]
+    elif isinstance(remove_ids, str):
+        remove_ids = [int(remove_ids)]
+    elif remove_ids is None:
+        remove_ids = []
+
+    focus_cid = cfg.get("CBM_ABLATION", {}).get("focus_id", [])
+    tot_preds_focus, tot_labels_focus, tot_probs_focus = [], [], []
+    n_focus_images = 0
+
+    if remove_ids:
+        C = model.model.head.in_channels
+        gate = torch.ones(C, device=device)
+        gate[torch.tensor(remove_ids, device=device)] = 0.0
+        model.model.editing_vector = gate
+    else:
+        model.model.editing_vector = None
+
+    print("focus_cid:", focus_cid)
+    print("remove_ids:", remove_ids)
+    if remove_ids:
+        print("gate sum:", float(model.model.editing_vector.sum().item()), "C:", int(model.model.editing_vector.numel()))
+        print("gate removed check:", [float(model.model.editing_vector[i].item()) for i in remove_ids])
+
 
     visu = 0
     # Evaluation loop
@@ -310,6 +355,8 @@ def evaluate(cfg: DictConfig):
         ground_truth = segmentation_ground_truths(sample)
         labels, unk_masks = ground_truth
 
+        focus_active = False
+
 
         if cfg["MODEL"]["num_classes"] == 1:
             probs = torch.nn.functional.sigmoid(logits)
@@ -318,87 +365,195 @@ def evaluate(cfg: DictConfig):
             probs = torch.nn.functional.softmax(logits, dim=-1)
             _, predicted = torch.max(logits.data, -1)
 
+
+        if (model.model.useCBM and model.model.log_concepts):
+            concept_map = getattr(model.model, "last_concept_map", None)
+            if concept_map is not None:
+                # concept_map: [1, C, Hc, Wc]
+                Bc, Cc, Hc, Wc = concept_map.shape
+
+                concept_map_raw = getattr(model.model, "last_concept_map_raw", None)
+                if focus_cid is not None and 0 <= focus_cid < concept_map_raw.shape[1]:
+                    focus_active = bool((concept_map_raw[0, focus_cid] > 0).any().item())
+
+
+                # Upsample concept map to logits size (out_H, out_W)
+                H_out, W_out = logits.shape[1], logits.shape[2]
+                concept_map_up = F.interpolate(
+                    concept_map,
+                    size=(H_out, W_out),
+                    mode="bilinear",
+                    align_corners=False,
+                )[0]  # [C, H, W]
+
                 # ---- CBM per-concept TP/FP counting ----
-        concept_map = model.model.last_concept_map
-        if do_ablation and concept_map is not None:
-            H_out, W_out = logits.shape[1], logits.shape[2]
+                if do_ablation and concept_map is not None:
+                    H_out, W_out = logits.shape[1], logits.shape[2]
 
-            if cfg["MODEL"]["num_classes"] == 1:
-                base_field = logits[0, ..., 0]
-                fire_label = (ground_truth[0].to(device) > 0.5)
-                thr = float(cfg["MODEL"]["threshold"])
-                logit_thr = math.log(thr / (1.0 - thr))
-                base_pred = (base_field > logit_thr)
-            else:
-                fire_id = int(cfg["MODEL"].get("fire_class_id", 1))
-                bg_id = 1 - fire_id
-                base_field = logits[0, ..., fire_id] - logits[0, ..., bg_id]
-                fire_label = (ground_truth[0].to(device) == fire_id)
-                logit_thr = 0.0
-                base_pred = (base_field > logit_thr)
+                    if cfg["MODEL"]["num_classes"] == 1:
+                        base_field = logits[0, ..., 0]
+                        fire_label = (ground_truth[0].to(device) > 0.5)
+                        thr = float(cfg["MODEL"]["threshold"])
+                        logit_thr = math.log(thr / (1.0 - thr))
+                        base_pred = (base_field > logit_thr)
+                    else:
+                        fire_id = int(cfg["MODEL"].get("fire_class_id", 1))
+                        bg_id = 1 - fire_id
+                        base_field = logits[0, ..., fire_id] - logits[0, ..., bg_id]
+                        fire_label = (ground_truth[0].to(device) == fire_id)
+                        logit_thr = 0.0
+                        base_pred = (base_field > logit_thr)
 
-            if unk_masks is not None:
-                valid = unk_masks[0].to(device).bool()
-            else:
-                valid = torch.ones_like(fire_label, dtype=torch.bool, device=device)
+                    if unk_masks is not None:
+                        valid = unk_masks[0].to(device).bool()
+                    else:
+                        valid = torch.ones_like(fire_label, dtype=torch.bool, device=device)
 
-            lab = fire_label & valid
-            pred0 = base_pred & valid
+                    lab = fire_label & valid
+                    pred0 = base_pred & valid
 
-            tp0 = (pred0 & lab).sum(dtype=torch.int64)
-            fp0 = (pred0 & (~lab)).sum(dtype=torch.int64)
-            fn0 = ((~pred0) & lab).sum(dtype=torch.int64)
+                    tp0 = (pred0 & lab).sum(dtype=torch.int64)
+                    fp0 = (pred0 & (~lab)).sum(dtype=torch.int64)
+                    fn0 = ((~pred0) & lab).sum(dtype=torch.int64)
 
-            base_TP += tp0
-            base_FP += fp0
-            base_FN += fn0
+                    base_TP += tp0
+                    base_FP += fp0
+                    base_FN += fn0
 
-            act = concept_map[0].abs().amax(dim=(1, 2))
-            active_ids = (act > 0).nonzero(as_tuple=False).squeeze(1)
+                    act = concept_map[0].abs().amax(dim=(1, 2))
+                    active_ids = (act > 0).nonzero(as_tuple=False).squeeze(1)
 
-            if i == 0:
-                nz_per_patch = (concept_map[0] != 0).sum(dim=0).to(torch.int32)
-                print("logits", tuple(logits.shape))
-                print("concept_map", tuple(concept_map.shape))
-                print("nonzero per patch min/mean/max",
-                int(nz_per_patch.min().item()),
-                float(nz_per_patch.float().mean().item()),
-                int(nz_per_patch.max().item()))
-                print("active concepts in sample", int(active_ids.numel()))
-                print("w_eff abs mean", float(w_eff.abs().mean().item()), "max", float(w_eff.abs().max().item()))
-                if active_ids.numel() > 0:
-                    cid = int(active_ids[0].item())
-                    a1 = F.interpolate(concept_map[:, cid:cid+1], size=(H_out, W_out), mode="bilinear", align_corners=False)[0, 0]
-                    delta1 = (w_eff[cid] * a1).abs()
-                    pred1 = ((base_field - w_eff[cid] * a1) > logit_thr) & valid
-                    print("example cid", cid,
-                        "delta abs max", float(delta1.max().item()),
-                        "delta abs mean", float(delta1.mean().item()),
-                        "pixel flips", int((pred1 != pred0).sum().item()))
+                    if i == 0:
+                        nz_per_patch = (concept_map[0] != 0).sum(dim=0).to(torch.int32)
+                        print("logits", tuple(logits.shape))
+                        print("concept_map", tuple(concept_map.shape))
+                        print("nonzero per patch min/mean/max",
+                        int(nz_per_patch.min().item()),
+                        float(nz_per_patch.float().mean().item()),
+                        int(nz_per_patch.max().item()))
+                        print("active concepts in sample", int(active_ids.numel()))
+                        print("w_eff abs mean", float(w_eff.abs().mean().item()), "max", float(w_eff.abs().max().item()))
+                        if active_ids.numel() > 0:
+                            cid = int(active_ids[0].item())
+                            a1 = F.interpolate(concept_map[:, cid:cid+1], size=(H_out, W_out), mode="bilinear", align_corners=False)[0, 0]
+                            delta1 = (w_eff[cid] * a1).abs()
+                            pred1 = ((base_field - w_eff[cid] * a1) > logit_thr) & valid
+                            print("example cid", cid,
+                                "delta abs max", float(delta1.max().item()),
+                                "delta abs mean", float(delta1.mean().item()),
+                                "pixel flips", int((pred1 != pred0).sum().item()))
 
-            for s in range(0, active_ids.numel(), abl_chunk):
-                e = min(active_ids.numel(), s + abl_chunk)
-                ids = active_ids[s:e]
+                    for s in range(0, active_ids.numel(), abl_chunk):
+                        e = min(active_ids.numel(), s + abl_chunk)
+                        ids = active_ids[s:e]
 
-                a = F.interpolate(concept_map[:, ids], size=(H_out, W_out), mode="bilinear", align_corners=False)[0]
-                w = w_eff[ids].view(-1, 1, 1)
+                        a = F.interpolate(concept_map[:, ids], size=(H_out, W_out), mode="bilinear", align_corners=False)[0]
+                        w = w_eff[ids].view(-1, 1, 1)
 
-                ablated_field = base_field.unsqueeze(0) - w * a
-                pred = (ablated_field > logit_thr) & valid.unsqueeze(0)
+                        ablated_field = base_field.unsqueeze(0) - w * a
+                        pred = (ablated_field > logit_thr) & valid.unsqueeze(0)
 
-                tp1 = (pred & lab.unsqueeze(0)).flatten(1).sum(dim=1, dtype=torch.int64)
-                fp1 = (pred & (~lab).unsqueeze(0)).flatten(1).sum(dim=1, dtype=torch.int64)
-                fn1 = ((~pred) & lab.unsqueeze(0)).flatten(1).sum(dim=1, dtype=torch.int64)
+                        tp1 = (pred & lab.unsqueeze(0)).flatten(1).sum(dim=1, dtype=torch.int64)
+                        fp1 = (pred & (~lab).unsqueeze(0)).flatten(1).sum(dim=1, dtype=torch.int64)
+                        fn1 = ((~pred) & lab.unsqueeze(0)).flatten(1).sum(dim=1, dtype=torch.int64)
 
-                delta_TP[ids] += (tp1 - tp0)
-                delta_FP[ids] += (fp1 - fp0)
-                delta_FN[ids] += (fn1 - fn0)
+                        delta_TP[ids] += (tp1 - tp0)
+                        delta_FP[ids] += (fp1 - fp0)
+                        delta_FN[ids] += (fn1 - fn0)
 
-            if i in (0, 10, 100):
-                print("baseline TP/FP/FN so far",
-                    int(base_TP.item()), int(base_FP.item()), int(base_FN.item()))
-                print("delta sums so far",
-                    int(delta_TP.sum().item()), int(delta_FP.sum().item()), int(delta_FN.sum().item()))
+                    if i in (0, 10, 100):
+                        print("baseline TP/FP/FN so far",
+                            int(base_TP.item()), int(base_FP.item()), int(base_FN.item()))
+                        print("delta sums so far",
+                            int(delta_TP.sum().item()), int(delta_FP.sum().item()), int(delta_FN.sum().item()))
+
+
+                
+                # concept is "used" at a pixel if its activation > 0
+                concept_active = (concept_map_up > 0)  # [C, H, W]
+
+                if cfg["MODEL"]["num_classes"] == 1:
+                    # probs: [1, H, W, 1]
+                    fire_pred_mask = (probs[0, ..., 0] > cfg["MODEL"]["threshold"])
+                    fire_label_mask = (ground_truth[0].to(device) > 0.5)
+                else:
+                    fire_class_id = int(cfg["MODEL"].get("fire_class_id", 1))
+                    fire_pred_mask = (predicted[0] == fire_class_id)
+                    fire_label_mask = (ground_truth[0].to(device) == fire_class_id)
+
+                # valid pixels (mask out unknowns if provided)
+                if unk_masks is not None:
+                    valid_mask = unk_masks[0].to(device).bool()
+                    fire_pred_mask = fire_pred_mask & valid_mask
+                    fire_label_mask = fire_label_mask & valid_mask
+                    label_valid_mask = valid_mask
+                else:
+                    label_valid_mask = torch.ones_like(fire_label_mask, dtype=torch.bool, device=fire_label_mask.device)
+
+                # --- NEW: label-based contributions (fire vs non-fire) ---
+                # Masks on labels only (not conditioned on prediction)
+                fire_label_only = fire_label_mask & label_valid_mask
+                bg_label_only   = (~fire_label_mask) & label_valid_mask
+
+                # Effective fire weight per concept (fire logit margin)
+                head_w = model.model.head.weight.squeeze(-1).squeeze(-1)  # [num_classes, C]
+                if cfg["MODEL"]["num_classes"] == 1:
+                    w_eff = head_w[0]  # [C]
+                else:
+                    fire_id = int(cfg["MODEL"].get("fire_class_id", 1))
+                    bg_id = 1 - fire_id
+                    w_eff = head_w[fire_id] - head_w[bg_id]  # [C]
+
+                Cc, H_out, W_out = concept_map_up.shape
+                z_flat    = concept_map_up.view(Cc, -1)  # [C, H*W]
+                fire_flat = fire_label_only.view(-1).float().to(z_flat.device)
+                bg_flat   = bg_label_only.view(-1).float().to(z_flat.device)
+
+                energy_fire_inc = (z_flat * fire_flat.unsqueeze(0)).sum(dim=1)  # [C]
+                energy_bg_inc   = (z_flat * bg_flat.unsqueeze(0)).sum(dim=1)    # [C]
+
+                concept_energy_fire_label += energy_fire_inc.detach().cpu().numpy().astype(np.float64)
+                concept_energy_bg_label   += energy_bg_inc.detach().cpu().numpy().astype(np.float64)
+
+                w_eff_dev = w_eff.to(z_flat.device).view(-1, 1)  # [C, 1]
+
+                contrib_fire_inc = (w_eff_dev * z_flat * fire_flat.unsqueeze(0)).sum(dim=1)  # [C]
+                contrib_bg_inc   = (w_eff_dev * z_flat * bg_flat.unsqueeze(0)).sum(dim=1)    # [C]
+
+                concept_contrib_fire_label += contrib_fire_inc.detach().cpu().numpy().astype(np.float64)
+                concept_contrib_bg_label   += contrib_bg_inc.detach().cpu().numpy().astype(np.float64)
+
+                conceptVis = cfg.get("ConceptToVisualise", 0)
+
+                if np.count_nonzero(concept_active[conceptVis].cpu())>200 and visu < 9 and cfg.get("visualise", False):
+                    visu += 1
+                    np.save(arr=sample["inputs"],file=f"/home/grosse/CanadaFireSat-Model-CBM/results/visualisation/visu{str(visu)}")
+                    np.save(arr = concept_active[conceptVis].cpu(),file=f"/home/grosse/CanadaFireSat-Model-CBM/results/visualisation/visuLoc{str(visu)}")
+                    np.save(arr = sample["labels"],file=f"/home/grosse/CanadaFireSat-Model-CBM/results/visualisation/visuGt{str(visu)}")
+
+                if visu>=18:
+                    sys.exit(0)
+
+                tp_mask = fire_pred_mask & fire_label_mask        # correct fire prediction
+                fp_mask = fire_pred_mask & (~fire_label_mask)     # fire predicted, but not fire in GT
+
+                # Flatten spatial dims
+                tp_flat = tp_mask.view(-1)   # [H*W]
+                fp_flat = fp_mask.view(-1)
+
+                # concept_active: [C, H, W] -> [C, H*W]
+                concept_active_flat = concept_active.view(Cc, -1)
+
+                # Count TP/FP per concept where concept is active
+                tp_counts = (concept_active_flat & tp_flat.unsqueeze(0)).sum(dim=1).cpu().numpy()
+                fp_counts = (concept_active_flat & fp_flat.unsqueeze(0)).sum(dim=1).cpu().numpy()
+
+                region_name = img_name_info["region"]
+                concept_correct_region[region_name] += tp_counts
+                concept_false_region[region_name]   += fp_counts
+
+                concept_correct += tp_counts.astype(np.int64)
+                concept_false += fp_counts.astype(np.int64)
 
 
         loss = model.loss_fn["mean"](
@@ -413,6 +568,12 @@ def evaluate(cfg: DictConfig):
             preds = predicted.view(-1).cpu().numpy()
             probs = probs.view(-1, cfg["MODEL"]["num_classes"]).cpu().numpy()
             labels = labels.view(-1).cpu().numpy()
+
+        if focus_cid is not None and focus_active:
+            tot_preds_focus.append(preds)
+            tot_labels_focus.append(labels)
+            tot_probs_focus.append(probs)
+            n_focus_images += 1
 
         loss = loss.view(-1).cpu().detach().numpy()
 
@@ -484,6 +645,36 @@ def evaluate(cfg: DictConfig):
         "fire_AUC": class_auc[1],
     }
 
+    if focus_cid is not None and len(tot_preds_focus) > 0:
+        pred_focus = np.concatenate(tot_preds_focus)
+        lab_focus  = np.concatenate(tot_labels_focus)
+
+        focus_metrics = get_classification_metrics(
+            predicted=pred_focus,
+            labels=lab_focus,
+            n_classes=cfg["MODEL"]["num_classes"] + 1 if cfg["MODEL"]["num_classes"] == 1 else cfg["MODEL"]["num_classes"],
+            unk_masks=None,
+        )
+        _, _, _, _, _ = focus_metrics["micro"]
+        f_class_acc, f_class_precision, f_class_recall, f_class_F1, f_class_IOU = focus_metrics["class"]
+
+        metrics.update({
+            "concept_subset_concept_id": int(focus_cid),
+            "concept_subset_num_images": int(n_focus_images),
+            "concept_subset_num_pixels": int(pred_focus.size),
+            "concept_fire_Precision_subset": float(f_class_precision[1]),
+            "concept_fire_Recall_subset": float(f_class_recall[1]),
+            "concept_fire_F1_subset": float(f_class_F1[1]),
+        })
+    else:
+        if focus_cid is not None:
+            metrics.update({
+                "concept_subset_concept_id": int(focus_cid),
+                "concept_subset_num_images": int(n_focus_images),
+                "concept_fire_F1_subset": float("nan"),
+            })
+
+
     with open(output_dir / f"{cfg['split']}_metrics.txt", "w") as f:
         for key, value in metrics.items():
             f.write(f"{key}: {value}\n")
@@ -554,7 +745,7 @@ def evaluate(cfg: DictConfig):
             for cid in range(num_concepts):
                 rows.append({
                     "concept_id": int(cid),
-                    "names": [cn[cid] for cn in concept_names_list],
+                    **{dict_cols[j]: concept_names_list[j][cid] for j in range(n_dicts)},
                     "region": region_name,
                     "correct_fire": int(corr_arr[cid]),
                     "false_fire": int(fp_arr[cid]),
@@ -581,7 +772,7 @@ def evaluate(cfg: DictConfig):
             for cid in range(num_concepts):
                 out_rows.append({
                     "concept_id": int(cid),
-                    "names": [cn[cid] for cn in concept_names_list],
+                    **{dict_cols[j]: concept_names_list[j][cid] for j in range(len(concept_names_list))},
                     "abl_iou": float(iou[cid]),
                     "abl_f1": float(f1[cid]),
                     "delta_iou": float(iou[cid] - base_iou),
@@ -608,29 +799,36 @@ def evaluate(cfg: DictConfig):
                 "correct_fire": concept_correct,
                 "false_fire": concept_false,
             }
-            if concept_cos is not None:
-                concept_usage["best_cosine"] = concept_cos
+            if concept_cos_list:
+                for j in range(n_dicts):
+                    concept_usage[f"best_cosine_{dict_cols[j]}"] = concept_cos_list[j]
 
-            np.savez(output_dir / f"{cfg['split']}_concept_usage.npz", **concept_usage)
 
-            import csv
+            #np.savez(output_dir / f"{cfg['split']}_concept_usage.npz", **concept_usage)
+
             csv_path = output_dir / f"{cfg['split']}_concept_usage.csv"
-            with open(csv_path, "w", newline="") as f:
-                writer = csv.writer(f)
-                header = ["concept_id", "name", "correct_fire", "false_fire"]
-                if concept_cos is not None:
-                    header.append("best_cosine_to_phrase")
-                writer.writerow(header)
-                for i in range(len(concept_ids)):
-                    row = [
-                        int(concept_ids[i]),
-                        [cn[i] for cn in concept_names_list],
-                        int(concept_correct[i]),
-                        int(concept_false[i]),
-                    ]
-                    if concept_cos is not None:
-                        row.append(float(concept_cos[i]))
-                    writer.writerow(row)
+
+            rows = []
+            for cid in range(num_concepts):
+                r = {
+                    "concept_id": int(cid),
+                    "correct_fire": int(concept_correct[cid]),
+                    "false_fire": int(concept_false[cid]),
+                    "contrib_fire_label": float(concept_contrib_fire_label[cid]),
+                    "contrib_bg_label": float(concept_contrib_bg_label[cid]),
+                    "energy_fire_label":  float(concept_energy_fire_label[cid]),
+                    "energy_bg_label":    float(concept_energy_bg_label[cid]),
+                }
+
+                for j in range(n_dicts):
+                    r[dict_cols[j]] = concept_names_list[j][cid]
+                if concept_cos_list:
+                    for j in range(n_dicts):
+                        r[f"{dict_cols[j]}_best_cosine"] = float(concept_cos_list[j][cid])
+
+                rows.append(r)
+
+            pd.DataFrame(rows).to_csv(csv_path, index=False)
             print(f"[CBM] Saved concept usage stats to {csv_path}.")
 
     print("Evaluation completed!")

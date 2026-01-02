@@ -2,92 +2,108 @@ defaults:
   - _self_
   - global_config
 
-MODEL:
-  architecture: "MSClipFacto"
-  msclip_model_name: "Llama3-MS-CLIP-Base"
-  msclip_ckpt: ""        # or path to local ckpt; leave empty to use HF download configured in build_model
-  input_img_res: 264
-  img_res: 224
-  train_max_seq_len: 5
-  val_max_seq_len: 5
-  input_dim: 10
-  patch_size: 16
-  num_classes: 2
-  channels: 10
-  threshold: 0.5
-  ds_labels: true
-  use_cls_fusion: false
-  use_l1c2l2a_adapter: false
-  unfreeze_last_block: false
-  pretrained: true
-  l1c2l2a_Adapter_loc: "${paths.l1c2l2a_Adapter_loc}"
-  out_H: 25
-  out_W: 25
-  temp_enc_type: "attention" 
-  learned_query: false
-  freeze_msclip: true
-  clearclip:
-    enabled: false          
-    apply_to_last_n: 1     
-    keep_ffn: false        # should be false for ClearCLIP
-    keep_residual: false   # should be false for ClearCLIP
-    use_self_self_attn: true    
-    ss_attn_iter: 1             
-    ss_attn_temp: null          
-    override_forward_for_dense: true
-
-SOLVER:
-  num_epochs: 50
-  num_warmup_epochs: 2
-  loss_function: masked_dice_loss #combined_dice_ce or masked_dice_loss
-  lr_scheduler: 'cosine'
-  lr_start: 1e-7
-  lr_min: 1e-7
-  num_cycles: 1
-  lr_base: 5e-5
-  weight_decay: 0.01
-  accumulate_grad_batches: 1
-
-DATASETS:
-  mode: "huggingface"
-  kwargs:
-    mean_file: "${paths.bands_mean}"
-    std_file: "${paths.bands_std}"
-    with_loc: False
-    with_doy: True
-    use_msclip_norm: false
-    bands: [
-              "B2",
-              "B3",
-              "B4",
-              "B5",
-              "B6",
-              "B7",
-              "B8",
-              "B8A",
-              "B11",
-              "B12",
-          ]
-  train:
-    data_dir: "${paths.hf_data}"
-    batch_size: 12
-    num_workers: 8
-
-  eval:
-    data_dir: "${paths.hf_data}"
-    batch_size: 12
-    num_workers: 8
-
 
 CHECKPOINT:
-  load_from_checkpoint:
-  experiment_name: "MS-CLIP_Fixed_NoNoise"
-  save_path: "./results/models"
-  train_metrics_steps: 200 
+  experiment_name: MS-CLIP_CBM_k8_arch_dictFire
+  group: V5
+  load_from_checkpoint: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP/MSClipFacto-18-f1-0.46.ckpt"
+  save_path: results/models/MS-CLIP
   save_steps: 10000
-  wandb_project: "${wandb.project}"
-  wandb_user: "${wandb.user}"
-
+  train_metrics_steps: 200
+  wandb_project: wildfire-forecast
+  wandb_user: louis-grosse-epfl
+DATASETS:
+  eval:
+    batch_size: 24
+    data_dir: /work/eceo/CanadaFireSat
+    num_workers: 8
+  kwargs:
+    bands:
+    - B2
+    - B3
+    - B4
+    - B5
+    - B6
+    - B7
+    - B8
+    - B8A
+    - B11
+    - B12
+    mean_file: /work/eceo/CanadaFireSat/metadata/bands_mean.json
+    std_file: /work/eceo/CanadaFireSat/metadata/bands_std.json
+    use_msclip_norm: true
+    with_doy: true
+    with_loc: false
+  mode: huggingface
+  train:
+    batch_size: 24
+    data_dir: /work/eceo/CanadaFireSat
+    num_workers: 8
+MODEL:
+  ABMIL: false
+  architecture: MSClipFacto
+  channels: 10
+  clearclip:
+    attn_variant: qq
+    enabled: false
+    keep_ffn: false
+    keep_residual: false
+    n_last: 1
+  ds_labels: true
+  fire_class_id: 1
+  freeze_msclip: true
+  img_res: 224
+  input_dim: 10
+  input_img_res: 264
+  l1c2l2a_Adapter_loc: /work/eceo/grosse/l1c2l2a_linear.pt
+  log_abmil: false
+  log_abmil_fold_mixer: false
+  log_concepts: false
+  msclip_ckpt: ''
+  msclip_model_name: Llama3-MS-CLIP-Base
+  num_classes: 2
+  out_H: 25
+  out_W: 25
+  patch_size: 16
+  pretrained: true
+  sae_config: "/home/grosse/CanadaFireSat-Model-CBM/results/topk_V4/SAE_k8_8192_archetypal_dictFire/2025-12-20_16-06-50/config.yaml"
+  sclip:
+    enabled: false
+    keep_ffn: true
+    keep_residual: true
+    n_last: 1
+  temp_enc_type: mixer
+  test_max_seq_len: 5
+  threshold: 0.5
+  train_max_seq_len: 5
+  unfreeze_last_block: false
+  use_CBM: true
+  use_cls_fusion: false
+  use_l1c2l2a_adapter: false
+  use_mixer: true
+  val_max_seq_len: 5
 SET-UP:
+  local_device_ids:
+  - 0
   seed: 42
-  local_device_ids: [0,1,2,3]
+SOLVER:
+  accumulate_grad_batches: 2
+  loss_function: masked_dice_loss
+  lr_base: 5.0e-06
+  lr_min: 1.0e-07
+  lr_scheduler: cosine
+  lr_start: 1.0e-07
+  num_cycles: 1
+  num_epochs: 10
+  num_steps_train: 3252
+  num_warmup_epochs: 2
+  weight_decay: 0.01
+paths:
+  bands_mean: /work/eceo/CanadaFireSat/metadata/bands_mean.json
+  bands_std: /work/eceo/CanadaFireSat/metadata/bands_std.json
+  hf_data: /work/eceo/CanadaFireSat
+  l1c2l2a_Adapter_loc: /work/eceo/grosse/l1c2l2a_linear.pt
+  output_dir: /work/eceo/grosse/topk_overcomplete_runs
+wandb:
+  project: wildfire-forecast
+  user: louis-grosse-epfl

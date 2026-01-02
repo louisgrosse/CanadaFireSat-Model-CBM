@@ -6,7 +6,7 @@ import torch
 import pytorch_lightning as pl
 import torch.nn as nn
 from torch.utils.data import Subset, DataLoader
-from overcomplete.sae import TopKSAE, JumpSAE, BatchTopKSAE, SAE
+from overcomplete.sae import TopKSAE, JumpSAE, BatchTopKSAE, SAE, RATopKSAE
 from overcomplete.sae.train import extract_input, _compute_reconstruction_error
 from overcomplete.sae.trackers import DeadCodeTracker
 from overcomplete.metrics import l0_eps, avg_l2_loss, hoyer
@@ -38,10 +38,17 @@ class plSAE(pl.LightningModule):
             align_start_epoch: int= 40,
             sae_kwargs: Dict[str, Any] = {},
             criterion_kwargs: Dict[str, Any] = {},
+            points: float = None,
     ):
         super().__init__()
         self.save_hyperparameters(logger=False)
-        self.net = self.sae_factory(sae_type, **sae_kwargs)
+
+        print("initializing sae")
+
+        if points is not None:
+            points = points.to(self.device)
+
+        self.net = self.sae_factory(sae_type,points,points = points, **sae_kwargs)
 
         if loss_type == "mse_auxk_true":
             n_features = self.net.get_dictionary().shape[0]
@@ -79,7 +86,6 @@ class plSAE(pl.LightningModule):
     def sae_factory(sae_type: str,use_relaxed_dict: bool = False, points = None, **sae_kwargs) -> nn.Module:
 
         if sae_type == "topk":
-            print("Using topk sae")            
             return TopKSAE(**sae_kwargs)
         elif sae_type == "jump":
             return JumpSAE(**sae_kwargs)
@@ -87,6 +93,8 @@ class plSAE(pl.LightningModule):
             return BatchTopKSAE(**sae_kwargs)
         elif sae_type == "vanilla":
             return SAE(**sae_kwargs)
+        elif sae_type == "ra_sae":
+            return RATopKSAE(points = points, **sae_kwargs)
         else:
             raise NotImplementedError
     

@@ -113,14 +113,14 @@ def Canada_segmentation_transform(
 
     # Custom Bands Transforms
     if use_msclip_norm:
-        S2_UINT8_TO_REFLECTANCE = 10000.0 / 255.0
+        S2_UINT_TO_REFLECTANCE = 10000.0 / 255.0
         
         band_transform_list = [
             ToTensorMSCLIP(with_loc=with_loc),                            
             Rescale(output_size=(model_config["input_img_res"], model_config["input_img_res"])),
             Concat(concat_keys=["10x", "20x", "60x"]),      
             #StatsTap("pre-norm"),               
-            transforms.Lambda(partial(multiply_inputs, factor=S2_UINT8_TO_REFLECTANCE)),
+            transforms.Lambda(partial(multiply_inputs, factor=S2_UINT_TO_REFLECTANCE)),
             #StatsTap("post-rescale"),
             ReorderBands(MSCLIP_ORDER_10),
             #DebugTapOnce(band_order_probe),          
