@@ -4,7 +4,7 @@ defaults:
 
 
 CHECKPOINT:
-  experiment_name: MS-CLIP_CBM_BM_k8_8192
+  experiment_name: MS-CLIP_CBM_BM_k8_8192_B
   group: V5
   load_from_checkpoint: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP/MSClipFacto-18-f1-0.46.ckpt"
   save_path: results/models/MS-CLIP
@@ -89,8 +89,8 @@ SET-UP:
 SOLVER:
   accumulate_grad_batches: 2
   loss_function: masked_dice_loss
-  lr_base: 5.0e-06
-  lr_min: 1.0e-07
+  lr_base: 5.0e-05
+  lr_min: 1.0e-06
   lr_scheduler: cosine
   lr_start: 1.0e-07
   num_cycles: 1

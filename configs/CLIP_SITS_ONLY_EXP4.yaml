@@ -4,7 +4,7 @@ defaults:
 
 
 CHECKPOINT:
-  experiment_name: MS-CLIP_CBM_k8_arch_dictFire
+  experiment_name: MS-CLIP_CBM_k8_saeBM
   group: V5
   load_from_checkpoint: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP/MSClipFacto-18-f1-0.46.ckpt"
   save_path: results/models/MS-CLIP
@@ -66,7 +66,7 @@ MODEL:
   out_W: 25
   patch_size: 16
   pretrained: true
-  sae_config: "/home/grosse/CanadaFireSat-Model-CBM/results/topk_V4/SAE_k8_8192_archetypal_dictFire/2025-12-20_16-06-50/config.yaml"
+  sae_config: "/home/grosse/CanadaFireSat-Model-CBM/results/topk_V4/SAE_k8_8192_bm_slow_long2/2025-12-31_11-15-33/config.yaml"
   sclip:
     enabled: false
     keep_ffn: true

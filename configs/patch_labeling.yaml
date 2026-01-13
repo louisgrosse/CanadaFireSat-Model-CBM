@@ -12,16 +12,16 @@ split: "validation"                  # "train" | "validation" | "test" | "test_h
 
 # Dictionary
 captions_dir: "/work/eceo/grosse/dictionnaryV2/"
-captions_glob: ["kmeans_k5n2_11k_wildfire.csv"] #["kmeans_k3n3_10k.csv", "kmeans_k3n3_30k.csv","kmeans_k3n3_50k.csv","kmeans_k5n2_10k.csv","kmeans_k5n2_30k.csv","kmeans_k5n2_50k.csv"]  # "*.parquet" or "*.csv"  'concept_countsCLIPDATASET.csv'
+captions_glob: ["kmeans_k3n3_50k.csv"] #["kmeans_k3n3_10k.csv", "kmeans_k3n3_30k.csv","kmeans_k3n3_50k.csv","kmeans_k5n2_10k.csv","kmeans_k5n2_30k.csv","kmeans_k5n2_50k.csv"]  # "*.parquet" or "*.csv"  'concept_countsCLIPDATASET.csv'
 max_phrases:  #50000, None to take all, 
 text_batch_size: 512
 # Visualization
 rgb_bands: [2,1,0]  # (B4,B3,B2)-like indices in MS-CLIP 10-band order
-n_show_batches: 1                  # how many batches to visualize
+n_show_batches: 10                  # how many batches to visualize
 topk_words_plot: 8
 seed: 42
 # Output
-out_dir: "results/dictionnary/patch_naming_sclip_fire"
+out_dir: "results/dictionnary/patch_naming_clearclip2"
 
 sae:
   load_from_ckpt: 
@@ -69,13 +69,6 @@ MODEL:
     n_last: 1
     keep_ffn: true   #Turn to false if you want to combine ClearCLIP and SCLIP
     keep_residual: true
-  denseclip:
-    enabled: false
-    class_names: ["no fire", "fire"]
-    prompt_template: "A satellite image of {}."
-    concat_scores: true
-    tau: 0.07
-
 
 SOLVER:
   num_epochs: 20

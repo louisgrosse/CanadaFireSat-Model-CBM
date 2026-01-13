@@ -2,32 +2,34 @@ defaults:
   - _self_
   - global_config
 
-model_path: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP/MS-CLIP_CBM_k8_arch_dict/MSClipFacto-09-f1-0.46.ckpt" 
+model_path: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-ClearCLIP_mixer_CBM/MSClipFacto-07-f1-0.45.ckpt" 
 config_name: "config_file.yaml"
 mode: "image"
-split: "train" # test, val,test_hard
-output_dir: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP/MS-CLIP_CBM_k8_arch_dict/metrics"
+split: "val" # test, val,test_hard
+output_dir: "/home/grosse/CanadaFireSat-Model-CBM/results/models/MS-ClearCLIP_mixer_CBM/metrics4234Focus"
 seed: 42
 with_region: True
 n_plots: 50
 size_plots: 6
 log_concepts: true
 visualise: false
-ConceptToVisualise: 
+ConceptToVisualise:  
 
 
 CBM_ABLATION:
   enabled: true
   chunk_size: 1024
-  remove_ids: [] 
-  focus_id: 
+  remove_ids: 
+  enhance_ids: 
+  enhance_factor: 
+  focus_id: 4234 #
 
 
 CHECKPOINT:
-  experiment_name: MS-CLIP_CBM_k8_arch_dict
+  experiment_name: MS-ClearCLIP_mixer_CBM
   group: V5
-  load_from_checkpoint: /home/grosse/CanadaFireSat-Model-CBM/results/models/MS-CLIP/MSClipFacto-18-f1-0.46.ckpt
-  save_path: results/models/MS-CLIP/MS-CLIP_CBM_k8_arch_dict
+  load_from_checkpoint: /home/grosse/CanadaFireSat-Model-CBM/results/models/MS-ClearCLIP/MSClipFacto-17-f1-0.45.ckpt
+  save_path: results/models/MS-ClearCLIP_mixer_CBM
   save_steps: 10000
   train_metrics_steps: 200
   wandb_project: wildfire-forecast
@@ -65,7 +67,7 @@ MODEL:
   channels: 10
   clearclip:
     attn_variant: qq
-    enabled: false
+    enabled: true
     keep_ffn: false
     keep_residual: false
     n_last: 1
@@ -78,7 +80,6 @@ MODEL:
   l1c2l2a_Adapter_loc: /work/eceo/grosse/l1c2l2a_linear.pt
   log_abmil: false
   log_abmil_fold_mixer: false
-  log_concepts: false
   msclip_ckpt: ''
   msclip_model_name: Llama3-MS-CLIP-Base
   num_classes: 2
@@ -86,7 +87,8 @@ MODEL:
   out_W: 25
   patch_size: 16
   pretrained: true
-  sae_config: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V4/SAE_k8_8192_archetypal_dict/2025-12-20_16-05-57/config.yaml
+  sae_before_attention: false
+  sae_config: /home/grosse/CanadaFireSat-Model-CBM/results/topk_V4/SAE_clearclip_k8_8192/2025-12-21_11-08-48/config.yaml
   sclip:
     enabled: false
     keep_ffn: true
@@ -109,7 +111,7 @@ SET-UP:
 SOLVER:
   accumulate_grad_batches: 2
   loss_function: masked_dice_loss
-  lr_base: 5.0e-06
+  lr_base: 5.0e-05
   lr_min: 1.0e-07
   lr_scheduler: cosine
   lr_start: 1.0e-07

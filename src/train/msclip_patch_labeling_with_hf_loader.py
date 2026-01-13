@@ -413,6 +413,36 @@ def project_patch_tokens_to_text_space(
     out = F.normalize(out, dim=-1)
     return out  # [B,P,D_txt]
 
+def msclip_denorm_s2_rgb(
+    x_norm: torch.Tensor,
+    means, stds,
+    rgb_bands=(2, 1, 0),     # depends on your ReorderBands; see note below
+    ref_max=0.2,
+    gamma=1
+) -> np.ndarray:
+    """
+    x_norm: [C,H,W] normalized with MSCLIP stats on S2 scaled-reflectance (reflectance*10000) scale.
+    Returns RGB quicklook in [0,1].
+    """
+    means_t = torch.as_tensor(means, dtype=torch.float32, device=x_norm.device).view(-1, 1, 1)
+    stds_t  = torch.as_tensor(stds,  dtype=torch.float32, device=x_norm.device).view(-1, 1, 1)
+
+    # De-norm back to S2 "scaled reflectance" units (~0..10000)
+    x_scaled = x_norm * stds_t + means_t
+
+    r, g, b = rgb_bands
+    arr = x_scaled[[r, g, b]].detach().cpu().numpy()
+    arr = np.moveaxis(arr, 0, -1)  # HWC, still ~0..10000
+
+    arr_ref = arr / 10000.0
+
+    rgb = np.clip(arr_ref / float(ref_max), 0.0, 1.0)
+
+    if gamma and gamma != 1.0:
+        rgb = rgb ** (1.0 / float(gamma))
+
+    return rgb
+
 def visualize_positives_tripanel(
     x_pos_btc_hw: torch.Tensor,     # [Bpos,T,C,H,W] or [Bpos,C,H,W]
     top1_pos_bp: torch.Tensor,      # [Bpos,P] (predicted phrase idx per cell) or [Bpos] (single idx)
@@ -444,34 +474,12 @@ def visualize_positives_tripanel(
 
     _, _, Hc, Wc = y_pos_b1hw.shape
 
-    S2_NAME_TO_IDX = {"B2":0,"B3":1,"B4":2,"B5":3,"B6":4,"B7":5,"B8":6,"B8A":7,"B11":8,"B12":9}
-    def _resolve_rgb(rgb_bands):
-        if isinstance(rgb_bands, (list, tuple)):
-            if all(isinstance(x, int) for x in rgb_bands):
-                return tuple(rgb_bands[:3])
-            if all(isinstance(x, str) for x in rgb_bands):
-                preferred = ["B4","B3","B2"]
-                if all(n in rgb_bands for n in preferred):
-                    return (S2_NAME_TO_IDX["B4"], S2_NAME_TO_IDX["B3"], S2_NAME_TO_IDX["B2"])
-                mapped = [S2_NAME_TO_IDX[n] for n in rgb_bands if n in S2_NAME_TO_IDX]
-                if len(mapped) >= 3:
-                    return tuple(mapped[:3])
-        return (2,1,0)
-    r,g,b = _resolve_rgb(rgb_bands)
-
-    means = torch.tensor(MSCLIP_MEANS, dtype=torch.float32, device=x_pos_btc_hw.device).view(1,1,-1,1,1)
-    stds  = torch.tensor(MSCLIP_STDS,  dtype=torch.float32, device=x_pos_btc_hw.device).view(1,1,-1,1,1)
-    x_ref = (x_pos_btc_hw * stds + means).clamp(min=0)  # [Bpos,T,C,H,W] 
-
     palette = _build_palette(256) 
 
     for b in range(Bpos):
-        img_full = x_ref[b, T//2]  # [C,H,W] 
+        img_full = x_pos_btc_hw[b, 0]  # [C,H,W] 
 
-        rgb_full = img_full[[r,g,b]].detach().cpu().numpy()  # [3,H,W]
-        rgb_full = np.moveaxis(rgb_full, 0, -1)              # [H,W,3]
-        lo = np.percentile(rgb_full, 1.0); hi = np.percentile(rgb_full, 99.5)
-        rgb_full_disp = np.clip((rgb_full - lo) / (hi - lo + 1e-6), 0, 1)
+        rgb_full_disp = msclip_denorm_s2_rgb(img_full, means=MSCLIP_MEANS, stds=MSCLIP_STDS)
 
         img_full_bchw = img_full.unsqueeze(0)  # [1,C,H,W] on device
         img_coarse = torch.nn.functional.interpolate(
@@ -481,10 +489,8 @@ def visualize_positives_tripanel(
             align_corners=False
         )[0]  # [C,Hc,Wc]
 
-        rgb_coarse = img_coarse[[r,g,b]].detach().cpu().numpy()  # [3,Hc,Wc]
-        rgb_coarse = np.moveaxis(rgb_coarse, 0, -1)              # [Hc,Wc,3]
-        lo_c = np.percentile(rgb_coarse, 1.0); hi_c = np.percentile(rgb_coarse, 99.5)
-        rgb_coarse_disp = np.clip((rgb_coarse - lo_c) / (hi_c - 1e-6), 0, 1)
+
+        rgb_coarse_disp = msclip_denorm_s2_rgb(img_coarse, means=MSCLIP_MEANS, stds=MSCLIP_STDS)
 
         # === (C) GT mask at coarse res (no upsample) ===
         gt_mask_hw = y_pos_b1hw[b,0]                # [Hc,Wc], on device
@@ -638,6 +644,15 @@ def main(cfg: DictConfig):
         print("[INFO] Encoding text embeddings…")
         text_embs = tokenize_phrases(tokenizer, phrases, cfg["text_batch_size"], cfg["device"], model)  # [N,D]
 
+        baseline_phrase = "a satellite view of"
+        baseline_text = tokenize_phrases(tokenizer, [baseline_phrase], 1, cfg["device"], model)[0]  # [D], normalized
+
+        sum_unit = None      
+        sum_raw = None      
+        n_tokens = 0
+        sum_cos = 0.0        
+
+
         global_counts = np.zeros(len(phrases), dtype=int)
 
         # new: sum of cosine sims for that phrase over all assignments
@@ -679,14 +694,35 @@ def main(cfg: DictConfig):
             pooled_over_time = []
 
             X = x[:, 0,:,:,:]                    # [B,C,H,W]
-            pool, ptoks = model.image_encoder(X)
-            ptoks = vision.ln_post(ptoks)      # [B*T, P, 768] -> LN
-            ptoks = ptoks @ vision.proj
+
+            with torch.inference_mode():
+                pool, ptoks = model.image_encoder(X)
+                ptoks = vision.ln_post(ptoks)      # [B*T, P, 768] -> LN
+                ptoks = ptoks @ vision.proj
+
+            Bcur, Pcur, Dcur = ptoks.shape
+
+            ptoks_f = ptoks.float()
+
+            # normalized patches for cosine baseline
+            ptoks_unit = F.normalize(ptoks_f, dim=-1)  # [B,P,D]
+
+            # init sums once
+            if sum_unit is None:
+                sum_unit = torch.zeros((Dcur,), device=ptoks.device, dtype=torch.float64)
+                sum_raw  = torch.zeros((Dcur,), device=ptoks.device, dtype=torch.float64)
+
+            sum_unit += ptoks_unit.double().sum(dim=(0, 1))
+            sum_raw  += ptoks_f.double().sum(dim=(0, 1))
+            n_tokens += Bcur * Pcur
+
+
+            sum_cos += float((ptoks_unit * baseline_text.view(1, 1, -1)).sum(dim=-1).sum().item())
+
 
             # cosine sim to all phrases, per patch
             scores, idx = assign_labels_to_patches(ptoks, text_embs, topk=1)
-            # idx:    [B,P,1] → squeeze to [B,P]
-            # scores: [B,P,1] → squeeze to [B,P]
+            # [B,P,1] →  [B,P]
             top1 = idx.squeeze(-1)
             sims = scores.squeeze(-1)
 
@@ -754,6 +790,24 @@ def main(cfg: DictConfig):
                     )
                     plotted_batches += 1
 
+        # ---- finalize mu + cosine checks ----
+        if n_tokens > 0:
+            mean_unit = (sum_unit / n_tokens).float()   # mean of unit patch vectors (not unit itself)
+            mean_raw  = (sum_raw  / n_tokens).float()   # mean of raw patch embeddings
+
+            avg_cos = sum_cos / n_tokens  # exactly mean_i cos(p_i, phrase)
+
+            cos_mu_unit = float((F.normalize(mean_unit, dim=0) * baseline_text).sum().item())
+            cos_mu_raw  = float((F.normalize(mean_raw,  dim=0) * baseline_text).sum().item())
+
+            print("\n[MU CHECK]")
+            print(f"  phrase = {baseline_phrase!r}")
+            print(f"  tokens counted = {n_tokens}")
+            print(f"  avg_cos_over_patches           = {avg_cos:.6f}")
+            print(f"  cos(normalize(mean_unit), t)   = {cos_mu_unit:.6f}")
+            print(f"  cos(normalize(mean_raw),  t)   = {cos_mu_raw:.6f}")
+        else:
+            print("[MU CHECK] No tokens counted; check dataloader / early breaks.")
 
         # Global plot adn CSV
         topN = cfg["topk_words_plot"]

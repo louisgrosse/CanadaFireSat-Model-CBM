@@ -221,14 +221,18 @@ class MSClipFactorizeModel(nn.Module):
             self.doy_embed_mix  = DOYEmbed(self.mix_dim)
             self.doy_embed_pool = DOYEmbed(self.embed_dim)
 
-            self.doy_embed_attn = DOYEmbed(1)  # [B,T,1]
-            self.doy_attn_scale = nn.Parameter(torch.tensor(0.1))  # start small; learns how much DOY matters
-
         self.temporal_mixer = TemporalMixer(embed_dim=self.mix_dim, num_heads=4, mlp_ratio=2.0, dropout=0.1)
 
         self.useCBM = use_CBM
         self.last_concept_map = None
         self.last_concept_map_raw = None
+        # When sae_before_attention=True and log_concepts=True, we store three concept maps
+        self.last_concept_map_last = None
+        self.last_concept_map_mean = None
+        self.last_concept_map_delta = None
+        self.last_concept_map_last_raw = None
+        self.last_concept_map_mean_raw = None
+        self.last_concept_map_delta_raw = None
         
         if self.useCBM:
             cfg_sae = OmegaConf.load(sae_config)
@@ -259,11 +263,16 @@ class MSClipFactorizeModel(nn.Module):
             for p in self.sae.net.parameters():
                 p.requires_grad = False
 
-            concept_dim = cfg_sae["nb_concepts"]
-            self.head = nn.Conv2d(concept_dim, num_classes, 1)
+            concept_dim = int(cfg_sae["nb_concepts"])
+            self.concept_dim = concept_dim
 
+            # In sae_before_attention mode we append cyclic DOY as two channels (sin, cos) -> (C+2) = 8194
+            # and use the Option-B temporal summary: [last, mean, delta] -> 3*(C+2) channels.
             if self.sae_before_attention:
-                self.concept_time_query = nn.Parameter(torch.zeros(concept_dim))
+                self.concept_dim_plus = concept_dim + 2
+                self.head = nn.Conv2d(3 * self.concept_dim_plus, num_classes, 1)
+            else:
+                self.head = nn.Conv2d(concept_dim, num_classes, 1)
 
 
         else:
@@ -301,99 +310,110 @@ class MSClipFactorizeModel(nn.Module):
 
 
         if self.useCBM and self.sae_before_attention:
-            # patch_feats currently: [B*T, P, 768] (pre-projection tokens)
+
             patch_512 = self.vision.ln_post(patch_feats)              # [B*T, P, 768]
             patch_512 = patch_512 @ self.vision.proj                 # [B*T, P, 512]
             patch_512 = patch_512.view(B, T, self.num_patches, self.embed_dim)  # [B, T, P, 512]
 
-            # Valid mask per token (skip padded timesteps entirely for SAE)
-            valid_BTP = valid_BT.unsqueeze(2).expand(-1, -1, self.num_patches)   # [B, T, P]
-            valid_flat = valid_BTP.reshape(-1)                                   # [B*T*P]
+            # 2) Encode ALL (time,patch) tokens with the frozen SAE (no chunking)
+            tokens = patch_512.reshape(-1, self.embed_dim)            # [B*T*P, 512]
+            with torch.no_grad():
+                z_pre, z0 = self.sae.net.encode(tokens.float())        # z0: [B*T*P, C]
 
-            tokens = patch_512.reshape(-1, self.embed_dim)                       # [B*T*P, 512]
-
-            if valid_flat.any():
-                pos = valid_flat.nonzero(as_tuple=False).squeeze(1)              # [N_valid]
-                tokens_valid = tokens.index_select(0, pos)
-
-                # Buffers for per-token (time,patch) scores + logits
-                scores_valid = torch.empty((tokens_valid.shape[0],), device=tokens_valid.device, dtype=torch.float32)
-                logits_valid = torch.empty((tokens_valid.shape[0], self.head.out_channels), device=tokens_valid.device, dtype=torch.float32)
-
-                # Prepare head weights as a linear map: [num_classes, C_concepts]
-                head_w = self.head.weight[:, :, 0, 0]  # [num_classes, C]
-                head_b = self.head.bias                # [num_classes] or None
-
-                q = self.concept_time_query
-                if q is None:
-                    raise RuntimeError('sae_before_attention=True but concept_time_query is None. (SAE not loaded?)')
-
-                cs = max(256, int(self.sae_encode_chunk_size))
-
-                scores_chunks = []
-                logits_chunks = []
-
-                for s in range(0, tokens_valid.shape[0], cs):
-                    e = min(tokens_valid.shape[0], s + cs)
-
-                    # SAE encode: no grad
-                    with torch.no_grad():
-                        z_pre, z = self.sae.net.encode(tokens_valid[s:e].float())
-                        if self.editing_vector is not None:
-                            z = z * self.editing_vector.to(z.device).view(1, -1)
-
-                    z = z.detach()  
-
-                    # IMPORTANT: these must be tracked (q + head are trainable)
-                    scores_chunks.append((z * q.to(z.device)).sum(dim=-1))          # [chunk]
-                    logits_chunks.append(F.linear(z, head_w, head_b))               # [chunk, num_classes]
-
-                scores_valid = torch.cat(scores_chunks, dim=0).float()
-                logits_valid = torch.cat(logits_chunks, dim=0).float()
-
-                # Scatter back WITHOUT in-place writes
-                N = tokens.shape[0]
-                scores_all = torch.full((N,), -1e4, device=tokens.device, dtype=scores_valid.dtype)
-                logits_all = torch.zeros((N, self.head.out_channels), device=tokens.device, dtype=logits_valid.dtype)
-
-                scores_all = scores_all.index_copy(0, pos, scores_valid)
-                logits_all = logits_all.index_copy(0, pos, logits_valid)
-
-                scores_all.index_copy_(0, pos, scores_valid)
-                logits_all.index_copy_(0, pos, logits_valid)
+            # Apply concept ablation gate AFTER logging raw concepts (pre-gate).
+            if self.editing_vector is not None:
+                gate = self.editing_vector.to(z0.device).view(1, -1)
+                z = z0 * gate
             else:
-                print("There is a time series full of zeros!!!")
-                sys.exit(0)
+                z = z0
 
-            scores = scores_all.view(B, T, self.num_patches).permute(0, 2, 1).contiguous()  # [B,P,T]
-            logits_t = logits_all.view(B, T, self.num_patches, -1).permute(0, 2, 1, 3).contiguous()
-            valid_BPT = valid_BT.unsqueeze(1).expand(-1, self.num_patches, -1)              # [B,P,T]
+            # 3) Reshape to concept maps per timestep: Z_raw/Z = [B, T, C, H_p, W_p]
+            Z_raw = z0.view(B, T, self.num_patches, -1)
+            Z_raw = Z_raw.view(B, T, self.H_patch, self.W_patch, -1).permute(0, 1, 4, 2, 3).contiguous()
 
-            # ---- DOY bias on time scores (seasonality) ----
-            if self.use_doy and (doy is not None):
+            Z = z.view(B, T, self.num_patches, -1)
+            Z = Z.view(B, T, self.H_patch, self.W_patch, -1).permute(0, 1, 4, 2, 3).contiguous()
+
+            if doy is not None:
                 if doy.ndim > 2:
                     doy_use = doy.view(B, T, -1)[:, :, 0]
                 else:
                     doy_use = doy
-                assert doy_use.shape == (B, T), f"DOY must be [B,T], got {tuple(doy_use.shape)}"
+                # doy is expected to already be in [0, 1] (fraction of the year)
+                theta = 2.0 * math.pi * doy_use.to(Z.dtype)
+                sin = torch.sin(theta)
+                cos = torch.cos(theta)
+                cyc = torch.stack([sin, cos], dim=2)  # [B, T, 2]
+                doy_chan = cyc.unsqueeze(3).unsqueeze(4)  # [B, T, 2, 1, 1]
+                doy_chan = doy_chan.expand(-1, -1, 2, self.H_patch, self.W_patch)  # [B, T, 2, H_p, W_p]
+            else:
+                doy_chan = torch.zeros((B, T, 2, self.H_patch, self.W_patch), device=Z.device, dtype=Z.dtype)
 
-                # DOYEmbed assumes doy is in [0,1] (fraction of year). If yours is 1..366, normalize before passing in.
-                doy_bias_BT = self.doy_embed_attn(doy_use).squeeze(-1).to(scores.dtype)     # [B,T]
-                self.last_doy_attn_bias = doy_bias_BT.detach()                              # for logging/interpretability
-                scores = scores + self.doy_attn_scale * doy_bias_BT.unsqueeze(1)            # [B,P,T]
+            # Append DOY channels to both raw and gated concept tensors
+            Z_raw = torch.cat([Z_raw, doy_chan], dim=2)  # [B, T, C+2, H_p, W_p]
+            Z     = torch.cat([Z,     doy_chan], dim=2)  # [B, T, C+2, H_p, W_p]
 
-            # Masked softmax over time (variable seq_len)
-            scores = scores / max(self.concept_attn_temperature, 1e-6)
-            scores = scores.masked_fill(~valid_BPT, -1e4)
-            alpha = torch.softmax(scores, dim=-1) * valid_BPT.float()
-            alpha = alpha / (alpha.sum(dim=-1, keepdim=True) + 1e-6)
-            self.last_time_attn = alpha.detach()
+            # 5) Mask padded timesteps
+            M = valid_BT.to(Z.dtype).view(B, T, 1, 1, 1)  # [B,T,1,1,1]
+            Z_raw = Z_raw * M
+            Z     = Z * M
 
+            den = M.sum(dim=1).clamp_min(1.0)                              # [B,1,1,1]
+            Z_mean     = Z.sum(dim=1) / den                                # [B,C+2,H_p,W_p]
+            Z_mean_raw = Z_raw.sum(dim=1) / den                            # [B,C+2,H_p,W_p]
 
-            # Temporal aggregation in logit space (concept basis is preserved up to the head)
-            logits_patch = (alpha.unsqueeze(-1) * logits_t).sum(dim=2)                                # [B, P, num_classes]
-            logits_map = logits_patch.view(B, self.H_patch, self.W_patch, -1).permute(0, 3, 1, 2).contiguous()
+            last_idx = (seq_len - 1).clamp_min(0)                          # [B]
+            prev_idx = (last_idx - 1).clamp_min(0)                         # [B]
+            b_idx = torch.arange(B, device=Z.device)
 
+            Z_last     = Z[b_idx, last_idx]                                # [B,C+2,H_p,W_p]
+            Z_prev     = Z[b_idx, prev_idx]                                # [B,C+2,H_p,W_p]
+            Z_delta    = Z_last - Z_prev                                   # [B,C+2,H_p,W_p]
+
+            Z_last_raw  = Z_raw[b_idx, last_idx]                           # [B,C+2,H_p,W_p]
+            Z_prev_raw  = Z_raw[b_idx, prev_idx]                           # [B,C+2,H_p,W_p]
+            Z_delta_raw = Z_last_raw - Z_prev_raw                          # [B,C+2,H_p,W_p]
+
+            # Final features: [B, 3*(C+2), H_p, W_p]
+            feats = torch.cat([Z_last, Z_mean, Z_delta], dim=1)
+
+            if self.log_concepts:
+                # Store per-summary concept maps (exclude DOY channels) for evaluation / logging.
+                n_extra = int(Z_last.shape[1] - getattr(self, 'concept_dim', Z_last.shape[1]))
+                n_extra = max(n_extra, 0)
+
+                if n_extra > 0:
+                    z_last_log      = Z_last[:, :-n_extra].detach()
+                    z_mean_log      = Z_mean[:, :-n_extra].detach()
+                    z_delta_log     = Z_delta[:, :-n_extra].detach()
+
+                    z_last_raw_log  = Z_last_raw[:, :-n_extra].detach()
+                    z_mean_raw_log  = Z_mean_raw[:, :-n_extra].detach()
+                    z_delta_raw_log = Z_delta_raw[:, :-n_extra].detach()
+                else:
+                    z_last_log      = Z_last.detach()
+                    z_mean_log      = Z_mean.detach()
+                    z_delta_log     = Z_delta.detach()
+
+                    z_last_raw_log  = Z_last_raw.detach()
+                    z_mean_raw_log  = Z_mean_raw.detach()
+                    z_delta_raw_log = Z_delta_raw.detach()
+
+                # RAW = pre-ablation (pre editing_vector)
+                self.last_concept_map_last_raw  = z_last_raw_log.clone()
+                self.last_concept_map_mean_raw  = z_mean_raw_log.clone()
+                self.last_concept_map_delta_raw = z_delta_raw_log.clone()
+
+                # (Optionally) also expose the gated versions actually used for prediction
+                self.last_concept_map_last  = z_last_log
+                self.last_concept_map_mean  = z_mean_log
+                self.last_concept_map_delta = z_delta_log
+
+                # Backward-compatible alias: last timestep summary
+                self.last_concept_map_raw = self.last_concept_map_last_raw
+                self.last_concept_map     = self.last_concept_map_last
+
+            logits_map = self.head(feats)  # [B, num_classes, H_p, W_p]
             out = F.interpolate(
                 logits_map, size=(H, W) if not self.ds_labels else (self.out_H, self.out_W),
                 mode='bilinear', align_corners=False
