@@ -446,7 +446,7 @@ def msclip_denorm_s2_rgb(
 def visualize_positives_tripanel(
     x_pos_btc_hw: torch.Tensor,     # [Bpos,T,C,H,W] or [Bpos,C,H,W]
     top1_pos_bp: torch.Tensor,      # [Bpos,P] (predicted phrase idx per cell) or [Bpos] (single idx)
-    y_pos_b1hw: torch.Tensor,       # [Bpos,1,Hc,Wc] binarized GT mask at coarse res (e.g. 25x25)
+    y_pos_b1hw: torch.Tensor,       # [Bpos,1,Hc,Wc] (used only to get coarse size; not plotted)
     phrases: list,
     rgb_bands=(2,1,0),
     savepath: Optional[str] = None,
@@ -456,53 +456,54 @@ def visualize_positives_tripanel(
     title_prefix: str = "",
 ):
     """
-    For each positive sample:
-      Col 0: high-res RGB (for human context)
-      Col 1: coarse GT mask on coarse RGB (25x25, not upsampled)
-      Col 2: coarse predicted phrase overlay on coarse RGB (same 25x25 grid)
-      Col 3: legend of phrases (wrapped text)
+    New layout (no GT panel):
+      Col 0: high-res RGB (for context)
+      Col 1: coarse predicted phrase overlay on coarse RGB (same Hc x Wc grid)
+      Col 2: legend (bigger font, more spacing, wrapped phrases)
 
-    Key difference vs previous version:
-    - We treat the 'truth' and 'prediction' grids at their native coarse size (Hc,Wc),
-      which in your case is 25x25. We DO NOT upsample them to 224x224.
-    - We downsample RGB to that coarse size for visualization in Col 1 / Col 2.
+    Notes:
+      - We only use y_pos_b1hw to determine coarse Hc x Wc.
+      - No ground-truth overlay is drawn anymore.
     """
 
+    # normalize input dims to [B,T,C,H,W]
     if x_pos_btc_hw.ndim == 4:
         x_pos_btc_hw = x_pos_btc_hw.unsqueeze(1)
     Bpos, T, C, H, W = x_pos_btc_hw.shape
 
+    # coarse size from labels (not shown, just used for sizing)
     _, _, Hc, Wc = y_pos_b1hw.shape
 
-    palette = _build_palette(256) 
+    palette = _build_palette(256)
+
+    # legend styling tweaks
+    legend_fontsize = 12       # bigger text
+    legend_line_step = 0.16    # more vertical spacing
+    legend_patch_w = 0.12
+    legend_patch_h = 0.10
+    wrap_line_len = 46         # wrap a bit wider since we widened the legend column
+    wrap_max_lines = 5
 
     for b in range(Bpos):
-        img_full = x_pos_btc_hw[b, 0]  # [C,H,W] 
+        # ---- RGB hi-res (col 0)
+        img_full = x_pos_btc_hw[b, 0]                         # [C,H,W] (MS-CLIP-normalized)
+        rgb_full_disp = msclip_denorm_s2_rgb(
+            img_full, means=MSCLIP_MEANS, stds=MSCLIP_STDS
+        )
 
-        rgb_full_disp = msclip_denorm_s2_rgb(img_full, means=MSCLIP_MEANS, stds=MSCLIP_STDS)
-
-        img_full_bchw = img_full.unsqueeze(0)  # [1,C,H,W] on device
+        # ---- coarse RGB for overlay (col 1)
+        img_full_bchw = img_full.unsqueeze(0)                 # [1,C,H,W]
         img_coarse = torch.nn.functional.interpolate(
-            img_full_bchw,
-            size=(Hc,Wc),
-            mode="bilinear",
-            align_corners=False
-        )[0]  # [C,Hc,Wc]
+            img_full_bchw, size=(Hc, Wc), mode="bilinear", align_corners=False
+        )[0]                                                  # [C,Hc,Wc]
+        rgb_coarse_disp = msclip_denorm_s2_rgb(
+            img_coarse, means=MSCLIP_MEANS, stds=MSCLIP_STDS
+        )
 
-
-        rgb_coarse_disp = msclip_denorm_s2_rgb(img_coarse, means=MSCLIP_MEANS, stds=MSCLIP_STDS)
-
-        # === (C) GT mask at coarse res (no upsample) ===
-        gt_mask_hw = y_pos_b1hw[b,0]                # [Hc,Wc], on device
-        gt_mask_np = gt_mask_hw.detach().cpu().numpy()  # [Hc,Wc], 0/1
-
-        gt_overlay = np.zeros((Hc,Wc,4), dtype=np.float32)
-        gt_overlay[...,0] = 1.0  # red channel
-        gt_overlay[...,3] = (gt_mask_np > 0.5).astype(np.float32) * 0.4  # alpha
-
+        # ---- predicted label grid @ coarse res
         if top1_pos_bp.ndim == 1:
             label_grid = torch.full(
-                (Hc,Wc),
+                (Hc, Wc),
                 int(top1_pos_bp[b].item()),
                 dtype=torch.long,
                 device=x_pos_btc_hw.device
@@ -510,97 +511,94 @@ def visualize_positives_tripanel(
         else:
             Pcur = top1_pos_bp.shape[1]
             if Pcur == Hc * Wc:
-                label_grid = top1_pos_bp[b].view(Hc,Wc).to(torch.long)
+                label_grid = top1_pos_bp[b].view(Hc, Wc).to(torch.long)
             else:
-
                 side = int(round(Pcur ** 0.5))
                 tmp_grid = top1_pos_bp[b].view(side, side).to(torch.long)  # [side,side]
-                tmp_grid_f = tmp_grid[None,None].float()  # [1,1,side,side]
                 tmp_resized = torch.nn.functional.interpolate(
-                    tmp_grid_f,
-                    size=(Hc,Wc),
-                    mode="nearest"
-                )[0,0].to(torch.long)  # [Hc,Wc]
+                    tmp_grid[None, None].float(), size=(Hc, Wc), mode="nearest"
+                )[0, 0].to(torch.long)
                 label_grid = tmp_resized
 
         uniq, counts = torch.unique(label_grid, return_counts=True)
         freqs = counts.float() / float(Hc * Wc)
-        keep_pairs = [(int(u.item()), float(f.item())) for u,f in zip(uniq, freqs)]
+        keep_pairs = [(int(u.item()), float(f.item())) for u, f in zip(uniq, freqs)]
         keep_pairs = sorted(keep_pairs, key=lambda x: x[1], reverse=True)
         keep_pairs = [kp for kp in keep_pairs if kp[1] >= min_frac][:max_legend]
 
-
-        pred_overlay = np.zeros((Hc,Wc,4), dtype=np.float32)
+        # RGBA overlay from kept labels only
+        pred_overlay = np.zeros((Hc, Wc, 4), dtype=np.float32)
         label_grid_np = label_grid.detach().cpu().numpy()
+        uniq_all = np.unique(label_grid_np)
 
-
-        for k_label, _frac in keep_pairs:
-            color_rgb = palette[k_label % len(palette)]  # tuple/list len 3
+        # paint all patches
+        for k_label in uniq_all:
+            color_rgb = palette[int(k_label) % len(palette)]
             mask_k = (label_grid_np == k_label)
             pred_overlay[mask_k, 0] = color_rgb[0]
             pred_overlay[mask_k, 1] = color_rgb[1]
             pred_overlay[mask_k, 2] = color_rgb[2]
-            pred_overlay[mask_k, 3] = alpha  # alpha the same for all kept labels
+            pred_overlay[mask_k, 3] = alpha
 
+        # ---- Figure: 1 row, 3 columns (RGB | Pred overlay | Legend)
+        fig = plt.figure(figsize=(14.5, 4.8), dpi=150)
+        gs = fig.add_gridspec(1, 3, width_ratios=[5, 5, 4.5], wspace=0.18)
 
-        fig = plt.figure(figsize=(14,4), dpi=150)
-        gs = fig.add_gridspec(1, 4, width_ratios=[4,4,4,3], wspace=0.15)
-
-        ax_rgb = fig.add_subplot(gs[0,0])
+        # Col 0: RGB hi-res
+        ax_rgb = fig.add_subplot(gs[0, 0])
         ax_rgb.imshow(rgb_full_disp)
-        ax_rgb.set_title(f"{title_prefix} sample {b} - RGB hi-res", fontsize=9)
+        ax_rgb.set_title(f"{title_prefix} sample {b} – RGB", fontsize=10)
         ax_rgb.axis("off")
 
-        ax_gt = fig.add_subplot(gs[0,1])
-        ax_gt.imshow(rgb_coarse_disp, interpolation="nearest")
-        ax_gt.imshow(gt_overlay, interpolation="nearest")
-        ax_gt.set_title("Ground truth fire mask (coarse)", fontsize=9)
-        ax_gt.axis("off")
-
-        ax_pred = fig.add_subplot(gs[0,2])
+        # Col 1: predicted overlay (coarse)
+        ax_pred = fig.add_subplot(gs[0, 1])
         ax_pred.imshow(rgb_coarse_disp, interpolation="nearest")
         ax_pred.imshow(pred_overlay, interpolation="nearest")
-        ax_pred.set_title("Predicted regions (coarse)", fontsize=9)
+        ax_pred.set_title("Predicted regions (coarse)", fontsize=10)
         ax_pred.axis("off")
 
-        ax_leg = fig.add_subplot(gs[0,3])
+        # Col 2: legend (bigger)
+        ax_leg = fig.add_subplot(gs[0, 2])
         ax_leg.axis("off")
-        y_cursor = 0.95
-        dy = 0.12
+        y_cursor = 0.96
+        dy = legend_line_step
+
         for k_label, frac in keep_pairs:
-            if y_cursor < 0.05:
+            if y_cursor < 0.06:
                 break
             phrase_full = phrases[k_label] if 0 <= k_label < len(phrases) else f"id {k_label}"
-            phrase_wrapped = _wrap_phrase(phrase_full, max_len_line=40, max_lines=4)
+            phrase_wrapped = _wrap_phrase(phrase_full, max_len_line=wrap_line_len, max_lines=wrap_max_lines)
 
             color_rgb = palette[k_label % len(palette)]
-
+            # color patch
             ax_leg.add_patch(
                 plt.Rectangle(
-                    (0.05, y_cursor-0.04),
-                    0.1, 0.08,
+                    (0.05, y_cursor - legend_patch_h * 0.5),
+                    legend_patch_w, legend_patch_h,
                     transform=ax_leg.transAxes,
                     color=color_rgb,
                 )
             )
-
+            # text
             ax_leg.text(
-                0.18, y_cursor,
+                0.20, y_cursor,
                 f"{(frac*100):.1f}%\n{phrase_wrapped}",
                 transform=ax_leg.transAxes,
-                fontsize=8,
+                fontsize=legend_fontsize,
                 va="top",
             )
             y_cursor -= dy
 
+        # Save/show
         if savepath is not None:
             base, ext = os.path.splitext(savepath)
             out_path = f"{base}_b{b:02d}{ext if ext else '.png'}"
-            fig.savefig(out_path, bbox_inches="tight", pad_inches=0.1)
+            fig.savefig(out_path, bbox_inches="tight", pad_inches=0.12)
             print(f"[INFO] Wrote {out_path}")
             plt.close(fig)
         else:
             plt.show()
+
 
 @hydra.main(version_base=None, config_path=str(CONFIG_PATH))
 def main(cfg: DictConfig):
@@ -758,7 +756,7 @@ def main(cfg: DictConfig):
 
             # safety stop condition you added
             if plotted_batches > cfg["n_show_batches"]:
-                break
+                sys.exit(0)
 
             if len(pos_idx_list) > 0 and plotted_batches < cfg["n_show_batches"]:
 

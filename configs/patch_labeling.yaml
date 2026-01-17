@@ -21,7 +21,7 @@ n_show_batches: 10                  # how many batches to visualize
 topk_words_plot: 8
 seed: 42
 # Output
-out_dir: "results/dictionnary/patch_naming_clearclip2"
+out_dir: "results/dictionnary/patch_naming_sclip4"
 
 sae:
   load_from_ckpt: 
