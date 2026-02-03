@@ -29,7 +29,11 @@ This repo implements a “discover-then-name” concept bottleneck pipeline:
 ## Repository structure
 
 - `src/models/MSClipTemporalCBM.py` — MS-CLIP temporal model + CBM wiring (main forecasting model)
-- `src/CBM/` — concept bottleneck utilities (concept tensors, naming/alignment helpers, edits/ablations, analysis)
+- `src/CBM/` — concept bottleneck utilities (concept tensors, naming/alignment helpers, edits/ablations, analysis)$
+- `src/eval/` — Evaluation of the model on the validation and test sets
+- `src/data/` — Data preprocessing into a dataloader
+- `src/train/` — Training functions for the CBM models and the SAEs
+
 
 ---
 
@@ -46,8 +50,8 @@ Experiments target the **CanadaFireSat** benchmark:
 ## Getting started
 
 1. Create a Python environment (conda/venv).
-2. Install dependencies (e.g., `pip install -r requirements.txt` if provided).
-3. Point configs / scripts to your dataset location.
+2. Install dependencies (`pip install -r requirements.txt`).
+3. Point configs / scripts to your dataset location (edit the global config function to point to your dataset location and wandb credentials).
 
 ---
 
