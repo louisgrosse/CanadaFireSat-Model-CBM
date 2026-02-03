@@ -2,8 +2,6 @@
 
 ![Python Version](https://img.shields.io/badge/python-3.8%2B-blue.svg)
 
-# CanadaFireSat-Model-CBM
-
 Research code for **interpretable wildfire forecasting** on **CanadaFireSat** using a **Concept Bottleneck Model (CBM)** built from **Sparse Autoencoder (SAE)** concepts.
 
 - 💿 Dataset on [Hugging Face](https://huggingface.co/datasets/EPFL-ECEO/CanadaFireSat) <br>
