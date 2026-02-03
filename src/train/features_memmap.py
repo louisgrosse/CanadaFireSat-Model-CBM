@@ -1,3 +1,9 @@
+"""
+This python file saves list of all activations maps in a numpy mmap format in order to 
+facilite the training of the downstream SAEs.
+"""
+
+
 import json
 from tqdm.auto import tqdm
 from pathlib import Path
@@ -16,67 +22,12 @@ from src.data import get_data
 from src.models import get_model
 from src.utils.torch_utils import load_from_checkpoint
 
-"""
-@torch.no_grad()
-def prehead_forward(model: torch.nn.Module, x: torch.Tensor, doy: Optional[torch.Tensor] = None) -> torch.Tensor:
-    #[B, T, C, H, W] 
-    B, T, C, H, W = x.shape
-
-    x = x.reshape(B * T, C, H, W)
-
-    requires_enc_grad = any(p.requires_grad for p in model.image_encoder.parameters())
-    ctx = torch.enable_grad() if requires_enc_grad and model.training else torch.no_grad()
-    with ctx:
-        pooled_feats, patch_feats = model.msclip_model.image_encoder(x)
-        patch_feats = model.vision.ln_post(patch_feats)      # [B*T, P, 768] -> LN
-        patch_feats = patch_feats @ model.vision.proj
-
-    # [B, T, P, D]
-    patch_feats = patch_feats.view(B, T, model.num_patches, model.embed_dim)
-
-    if model.use_l1c2l2a_adapter:
-        patch_feats = model.l1c2l2a(patch_feats.view(B*T, model.num_patches, model.embed_dim)).view(
-            B, T, model.num_patches, model.embed_dim
-        )
-
-    # (B*P, T, D)
-    patch_feats = patch_feats.permute(0, 2, 1, 3).contiguous().view(B * model.num_patches, T, model.embed_dim)
-
-    doy_emb = None
-    if model.use_doy and doy is not None:
-        assert doy.shape[0] == B and doy.shape[1] == T, f"DOY shape mismatch: {doy.shape} vs {(B,T)}"
-        if doy.ndim > 2:  # [B,T,H,W,1] -> [B,T]
-            doy = doy.view(B, T, -1)[:, :, 0]
-        assert doy.shape == (B, T), f"DOY must be [B,T], got {tuple(doy.shape)}"
-        assert torch.isfinite(doy).all(), "DOY has NaN/Inf"
-
-        doy = doy.clamp(0, 1)
-        doy_emb = model.doy_embed(doy)  # [B,T,D]
-        doy_emb = doy_emb.unsqueeze(1).expand(-1, model.num_patches, -1, -1).reshape(
-            B * model.num_patches, T, model.embed_dim
-        )
-    else:
-        doy_emb = None
-
-
-    patch_feats = model.temp_enc(patch_feats, doy_emb=doy_emb)  # [B*P, D]
-    assert torch.isfinite(patch_feats).all(), "Temporal encoder produced NaN/Inf"
-
-    # [B, P, D]
-    patch_feats = patch_feats.view(B, model.num_patches, model.embed_dim)
-    if model.use_cls_fusion and model.has_cls_token:
-        cls_feats = cls_feats.view(B, T, model.embed_dim)
-        cls_feats = model.cls_temp_enc(cls_feats)
-        patch_feats = patch_feats + cls_feats.view(B,1,self.embed_dim)
-
-    # [B,D,H_p,W_p]
-    patch_feats = patch_feats.view(B, model.H_patch, model.W_patch, model.embed_dim).permute(0, 3, 1, 2).contiguous()
-
-    return patch_feats"""
-
-
 @torch.no_grad()
 def prehead_forward(model: torch.nn.Module, x: torch.Tensor, doy: Optional[torch.Tensor] = None,seq_len = None) -> torch.Tensor:
+    """
+    Recovers the activation maps from the forward of the msclipfactorize model
+    """
+    
     # [B, T, C, H, W]
     assert x.ndim == 5, f"inputs must be [B,T,C,H,W], got {x.ndim} dims"
     B, T, C, H, W = x.shape
@@ -201,7 +152,7 @@ def main(cfg: DictConfig):
     cfg = OmegaConf.to_container(cfg, resolve=True)
 
     out_root = Path(cfg["OUTPUT"]["out_root"])
-    dtype = "float32"  # float16 | float32
+    dtype = "float32"  # float16, float32
     splits = ["train", "validation","test"]
 
     device = 0

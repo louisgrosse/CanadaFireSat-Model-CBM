@@ -14,7 +14,7 @@ datamodule:
   
 model:
   net:
-    _target_: src.models.msclip_factorize_model.MSClipFactorizeModel  # example path
+    _target_: src.models.MSClipTemporalCBM.MSClipTemporalCBM  # example path
     from_msclip: false
     pretrained: false
 
@@ -152,7 +152,6 @@ ALIGN:
 # SAE Arguments
 use_archetypal: 
   enabled: false  #Turn off bind init if you use this
-  uniform: false
   CLIPtionnary: false
 
   

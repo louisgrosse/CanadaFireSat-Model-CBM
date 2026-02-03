@@ -159,7 +159,7 @@ def evaluate(cfg: DictConfig):
 
     if model.model.useCBM and model.model.log_concepts:
         print("loading sae config...")
-        base_model = model.model  # MSClipFactorizeModel
+        base_model = model.model  # MSClipTemporalCBM
         sae_module = model.model.sae
         if sae_module is not None and model.model.useCBM:
             sae_config_path = None

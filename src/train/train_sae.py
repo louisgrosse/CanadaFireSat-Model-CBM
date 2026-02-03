@@ -28,7 +28,6 @@ from src.utils.process_utils import save_activations_to_npy, save_labels_to_npy
 import numpy as np
 from src.constants import CONFIG_PATH
 import sys
-from src.data.hf_Canada.ssl4eos12_dataset import SSL4EOS12Dataset, collate_fn, S2L1C_MEAN, S2L1C_STD,S2L2A_MEAN, S2L2A_STD
 
 sys.path.append('MS-CLIP')
 from msclip.inference.utils import build_model
@@ -126,14 +125,8 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
         if cfg["use_archetypal"]["CLIPtionnary"]:
             points = text_embs
         else:
-            if cfg["use_archetypal"]["uniform"]:
-                print("Using unisform sampling to sample points")
-                points = sample_points_uniform(dl = act_datamodule.train_dataloader(),n_points=16000)
-            else:
-                print("Using k-means to sample points")
-                points = sample_points_kmeans(dl = act_datamodule.train_dataloader(),n_centers=16_000)
-
-        print("Points shape = ", points)
+            print("Using k-means to sample points")
+            points = sample_points_kmeans(dl = act_datamodule.train_dataloader(),n_centers=16_000)
         
         dirpath = Path(callbacks_cfg[0]["dirpath"])
         dirpath.mkdir(parents=True, exist_ok=True)
@@ -275,9 +268,6 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
             data= [list(x) for x in zip(*ngrams)],
         )
 
-        print("dataBis = ", len(dataBis), dataBis)
-        print("test: ",len(dataBis[0]))
-        print("columnsBis = ", columnsBis)
         dataBis_arr = np.stack(dataBis, axis=1)
         wandb_logger.log_table(key="CosineDistribution",columns = columnsBis  ,data=dataBis_arr.tolist())
         wandb_logger.log_table(key="alignment", columns=columns, data=data)
@@ -286,36 +276,11 @@ def train(cfg: DictConfig) -> Dict[Any, Any]:
     cfg.sae_ckpt_path = callbacks_cfg[0]["dirpath"] + "/last.ckpt"
     OmegaConf.save(cfg, os.path.join(ckpt_dir, "config.yaml"))
 
-
-def sample_points_uniform(n_points=16000, dl =None, cap_tokens_per_batch=4096, device="cpu"):
-
-    points = []
-    with torch.no_grad():
-        for batch in dl:
-
-            x = batch["inputs"]  
-            B, D, H, W = x.shape
-            x = x.permute(0, 2, 3, 1).contiguous().view(B * H * W, D)   # [B*H*W, D]    
-
-            x = x.float()
-            #x = (x - x.mean(dim=0, keepdim=True)) / (x.std(dim=0, unbiased=False, keepdim=True) + 1e-6) 
-
-            if x.shape[0] > cap_tokens_per_batch:
-                idx = torch.randperm(x.shape[0])[:cap_tokens_per_batch]
-                x = x[idx]
-
-            points.append(x.cpu())
-            if sum(p.shape[0] for p in points) >= n_points:
-                break
-
-    points = torch.cat(points, dim=0)
-    if points.shape[0] > n_points:
-        idx = torch.randperm(points.shape[0])[:n_points]
-        points = points[idx]
-    return points.to(device)
-
 @torch.no_grad()
 def sample_points_kmeans(dl=None, n_centers=16_000, cap_tokens_per_batch=8192):
+    """
+    Sample n_centers points from the input of the SAE using a mini-batch k-means.
+    """
     kmeans = MiniBatchKMeans(
         n_clusters=n_centers,
         batch_size=cap_tokens_per_batch,
@@ -356,6 +321,10 @@ def sample_points_kmeans(dl=None, n_centers=16_000, cap_tokens_per_batch=8192):
     return centers
 
 class NpyActivationDataset(Dataset):
+    """
+    If you saved the activation maps of the baseline model you can load them using this class to 
+    shape them for what the sae training function expects.
+    """
     def __init__(self, npy_path):
         self.data = np.load(npy_path, mmap_mode='r')
         lbl_path = npy_path.replace("features.npy", "labels.npy")                  
@@ -372,6 +341,9 @@ class NpyActivationDataset(Dataset):
         return {"inputs": x, "label": y}  
 
 class NpyActDataModule(LightningDataModule):
+    """
+    Uses the NpyActivationDataset to create dataloaders for the different splits.
+    """
     def __init__(self, batch_size: int, train_npy_path: str,
                  val_npy_path: Optional[str] = None, test_npy_path: Optional[str] = None):
         super().__init__()
@@ -401,6 +373,9 @@ class NpyActDataModule(LightningDataModule):
 
 @torch.no_grad()
 def _encode_phrases_msclip(phrases, model, tokenizer, batch_size, device):
+    """
+    This function encodes text in clip space using MS-CLIPs text tower.
+    """
     embs = []
     for i in range(0, len(phrases), batch_size):
         toks = tokenizer(phrases[i:i+batch_size]).to(device)
@@ -410,6 +385,10 @@ def _encode_phrases_msclip(phrases, model, tokenizer, batch_size, device):
 
 @torch.no_grad()
 def _alignment_stats_and_topk(sae_module, text_embs, device: str, phrases, k: int = 5,name:str = None, ckpt_dir:str = None,csv_name:str = None):
+    """
+    For a given dictionary of words embedded in CLIP space "text_embs", this function returns the 
+    top cosine alignment per sae dictionary 
+    """
     if sae_module.test_dead_tracker is not None:
         alive_mask = sae_module.test_dead_tracker.alive_features.detach().clone()
     else:
@@ -419,10 +398,7 @@ def _alignment_stats_and_topk(sae_module, text_embs, device: str, phrases, k: in
     D = sae_module.net.get_dictionary().to(device).float()
     D = F.normalize(D, dim=1)
     if alive_mask is not None:
-        print("Keeping only live atoms!!!")
-        print("before : ",D.shape)
         D = D[alive_mask.to(D.device)]
-        print("after : ", D.shape)
 
     T = F.normalize(text_embs.to(device).float(), dim=1)  # [N, Dt]
 

@@ -68,12 +68,7 @@ def sanity_probe_once(datamodule, model, device, use_msclip_stats=True):
     print("[inputs] per-channel mean (norm):", [round(v.item(),3) for v in ch_mean])
     print("[inputs] per-channel std  (norm):", [round(v.item(),3) for v in ch_std])
 
-    # Heuristic warnings if far from ~0/1
-    off = [(abs(m.item()), s.item()) for m,s in zip(ch_mean, ch_std)]
-    if any(m > 0.6 or s < 0.5 or s > 1.6 for m,s in off):
-        print("[warn] Channel norms look far from ~N(0,1). Domain shift or wrong stats could hurt convergence.")
-
-    # Optional: de-normalize to reflectance-like for band-order heuristics
+    #De-normalization
     if use_msclip_stats and C == 10:
         means = MSCLIP_MEANS.to(x.device).view(1,1,C,1,1)
         stds  = MSCLIP_STDS.to(x.device).view(1,1,C,1,1)
@@ -87,23 +82,9 @@ def sanity_probe_once(datamodule, model, device, use_msclip_stats=True):
         if _corr2(B8,B8A) < 0.8 or _corr2(B11,B12) < 0.8:
             print("[warn] Band correlations lower than usual; double-check band order mapping.")
 
-    # ---- Robust forward call (LightningModule or plain nn.Module) ----
-    logits = None
-    # Try: model(batch_dict) style
-    try:
-        logits = model(x, doy)                      # positional args (matches your FactorizeModel)
-    except TypeError:
-        try:
-            logits = model(x)                       # LightningModule.forward(batch_inputs_only)
-        except Exception:
-            # If it's a LM wrapper with .model inside:
-            if hasattr(model, "model"):
-                try:
-                    logits = model.model(x, doy)    # underlying nn.Module with (x, doy)
-                except TypeError:
-                    logits = model.model(x)
-            # Last resort: try named attribute self.model.image_encoder etc… but usually above succeeds.
 
+    logits = model(x, doy)                     
+    
     if logits is None:
         raise RuntimeError("Could not invoke model forward with any supported signature.")
 
@@ -115,7 +96,6 @@ def sanity_probe_once(datamodule, model, device, use_msclip_stats=True):
         print(f"[note] Resizing logits {logits.shape[-2:]} -> label size {(Lh,Lw)} for metrics check.")
         logits = F.interpolate(logits, size=(Lh, Lw), mode="bilinear", align_corners=False)
 
-    # Quick binary IoU (adjust for multi-class if needed)
     if logits.shape[1] == 1 or logits.shape[1] == 2:
         if logits.shape[1] == 2:
             probs = torch.softmax(logits, dim=1)[:, 1]
@@ -142,7 +122,6 @@ def train_and_evaluate(cfg: DictConfig):
 
     cfg = OmegaConf.to_container(cfg, resolve=True)
 
-    # Extract key variables from the config
     num_epochs = cfg["SOLVER"]["num_epochs"]
     save_steps = cfg["CHECKPOINT"]["save_steps"]
     save_path = cfg["CHECKPOINT"]["save_path"]
@@ -171,16 +150,9 @@ def train_and_evaluate(cfg: DictConfig):
     if checkpoint:
         load_from_checkpoint(net, checkpoint)
 
-    # Sanity probe (run once)
-    #try:
-    #    sanity_probe_once(datamodule, net.to(device), device, use_msclip_stats=True)
-    #except Exception as e:
-    #    print("[SANITY PROBE FAILED]", repr(e))
-    #    raise
-    
     # Set-up model checkpoint & callbacks
     checkpoint_callback_IoU = ModelCheckpoint(
-        monitor="fire_F1",  # Not sure name macro/IOU
+        monitor="fire_F1",  
         dirpath=save_path,
         filename=f"{arch_name}-" + "{epoch:02d}-f1-{fire_F1:.2f}",
         mode="max",
